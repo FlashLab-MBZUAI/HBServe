@@ -374,6 +374,9 @@ class HBServeEngine:
                     "physical_completion": dict(execution.physical_completion),
                 }
             )
+            # Release this iteration's graph before constructing the next one.
+            # The batch record already owns its complete audit summaries.
+            del canonical, execution
             batch_id += 1
         return self._result()
 

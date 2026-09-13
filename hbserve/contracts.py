@@ -78,13 +78,20 @@ class HBServeError(ValueError):
 
 
 def canonical_sha256(value: Any) -> str:
-    encoded = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), allow_nan=False)
+    digest = hashlib.sha256()
+    chunks: list[str] = []
+    size = 0
+    for chunk in encoder.iterencode(value):
+        chunks.append(chunk)
+        size += len(chunk)
+        if size >= 65536:
+            digest.update("".join(chunks).encode("utf-8"))
+            chunks.clear()
+            size = 0
+    if chunks:
+        digest.update("".join(chunks).encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _integer(value: Any, description: str, *, minimum: int = 0) -> int:

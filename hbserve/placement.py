@@ -15,6 +15,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import cached_property
 from hbserve.prefix import PrefixCache, block_keys
+from hbserve.block_references import BlockReferences
 import heapq
 import math
 from typing import Any, Mapping, Sequence
@@ -335,28 +336,62 @@ class _BlockPool:
         self.block_bytes = _positive_integer(block_bytes, "KV block bytes")
         self.capacity_blocks = (end - begin) // block_bytes
         self.end = begin + self.capacity_blocks * block_bytes
-        self._free: list[int] = list(range(self.capacity_blocks))
-        heapq.heapify(self._free)
-        self.references: dict[int, int] = {}
+        self._next_unused = 0
+        self._free_ranges: dict[int, int] = {}
+        self._free_ends: dict[int, int] = {}
+        self._free_starts: list[int] = []
+        self.references = BlockReferences()
 
     @property
     def free_blocks(self) -> int:
-        return len(self._free)
+        return self.capacity_blocks - len(self.references)
 
     @property
     def capacity_bytes(self) -> int:
         return self.capacity_blocks * self.block_bytes
 
     def allocate(self, count: int) -> list[int]:
-        if count > len(self._free):
+        _nonnegative_integer(count, "KV allocation count")
+        if count > self.free_blocks:
             raise HBServeError(
                 f"{self.tier} KV pool cannot allocate {count} blocks "
-                f"({len(self._free)} free)"
+                f"({self.free_blocks} free)"
             )
-        blocks = [heapq.heappop(self._free) for _ in range(count)]
+        blocks: list[int] = []
+        while count and self._free_ranges:
+            begin = heapq.heappop(self._free_starts)
+            end = self._free_ranges.pop(begin, None)
+            if end is None:
+                continue
+            del self._free_ends[end]
+            take = min(count, end - begin)
+            blocks.extend(range(begin, begin + take))
+            if begin + take < end:
+                self._free_ranges[begin + take] = end
+                self._free_ends[end] = begin + take
+                heapq.heappush(self._free_starts, begin + take)
+            count -= take
+        if count:
+            blocks.extend(range(self._next_unused, self._next_unused + count))
+            self._next_unused += count
         for block in blocks:
             self.references[block] = 1
+        self._compact_free_index()
         return blocks
+
+    def _compact_free_index(self) -> None:
+        # Coalescing removes interval boundaries. Keep lazy heap tombstones
+        # bounded even when the pool always has some live allocations.
+        if len(self._free_starts) > 2 * len(self._free_ranges) + 64:
+            self._free_starts = list(self._free_ranges)
+            heapq.heapify(self._free_starts)
+        if self._free_ranges.__sizeof__() > max(4096, 128 * len(self._free_ranges)):
+            self._free_ranges = dict(self._free_ranges)
+            self._free_ends = dict(self._free_ends)
+        if not self._free_ranges:
+            self._free_starts.clear()
+            self._free_ranges.clear()
+            self._free_ends.clear()
 
     def retain(self, blocks: Sequence[int]) -> None:
         for block in blocks:
@@ -370,12 +405,27 @@ class _BlockPool:
                 raise HBServeError(f"{self.tier} KV block {block} is out of range")
             if block not in self.references:
                 raise HBServeError(f"{self.tier} KV pool released a block twice")
-            self.references[block] -= 1
-            if self.references[block] == 0:
-                del self.references[block]
-                heapq.heappush(self._free, block)
-        if len(self._free) > self.capacity_blocks:
-            raise HBServeError(f"{self.tier} KV pool released a block twice")
+            references = self.references[block] - 1
+            if references:
+                self.references[block] = references
+                continue
+            del self.references[block]
+            left = self._free_ends.pop(block, None)
+            begin = block if left is None else left
+            end = self._free_ranges.pop(block + 1, block + 1)
+            if end != block + 1:
+                del self._free_ends[end]
+            if end == self._next_unused:
+                self._next_unused = begin
+                if left is not None:
+                    del self._free_ranges[left]
+            else:
+                self._free_ranges[begin] = end
+                self._free_ends[end] = begin
+                if left is None:
+                    heapq.heappush(self._free_starts, begin)
+            self._compact_free_index()
+
 
     def address(self, block: int) -> int:
         if not 0 <= block < self.capacity_blocks:
