@@ -14,3 +14,9 @@ The 70B descriptor preserves the original per-output-channel W8 scale and
 embedding storage assumptions through the public model ledger. Paper-specific
 analysis runners, production evidence, and local experiment history are not
 included.
+
+The simulation-session client incorporates protocol and controller-HBM contract
+updates from HBFSim `2a59b7f13461356d33c00ad1f25fdee4e0bf7fb1`, including
+logical page invalidation and wear-output arguments required by native SGLang. Digest performance changes,
+transaction storage optimizations and optional zone commands are not part
+of this compatibility update. See docs/configuration.md.

@@ -1,0 +1,965 @@
+{
+  "repository": "HBFSim",
+  "commit": "2a59b7f13461356d33c00ad1f25fdee4e0bf7fb1",
+  "profiles": {
+    "4hbm-4hbf-miniquick.cfg": {
+      "source": "configs/systems/miniquick/4hbm-4hbf.cfg",
+      "sha256": "bf169b1d78a9fd2033f4aa6c6d00e6442e356e300c0da5c9856cd05e02b74bfc"
+    },
+    "4hbm-4hbf.cfg": {
+      "source": "configs/systems/4hbm-4hbf.cfg",
+      "sha256": "7b49fd1ba884486ac9b98adceaaccb23a641b40b2c96274ba838faf79376bfb4"
+    },
+    "eight-stack-baseline.cfg": {
+      "source": "configs/systems/eight-stack-baseline.cfg",
+      "sha256": "a1e9e46f7054260351d04101fd54c1bf4df144cd606fc88fe5519d26390c2823"
+    },
+    "systems/2hbm-6hbf.cfg": {
+      "source": "configs/systems/2hbm-6hbf.cfg",
+      "sha256": "04100bc62516c8f80160a2e9d214fbc3561315ac25cf2672f2d50050b3c42916"
+    },
+    "systems/4hbm-4hbf.cfg": {
+      "source": "configs/systems/4hbm-4hbf.cfg",
+      "sha256": "7b49fd1ba884486ac9b98adceaaccb23a641b40b2c96274ba838faf79376bfb4"
+    },
+    "systems/6hbm-2hbf.cfg": {
+      "source": "configs/systems/6hbm-2hbf.cfg",
+      "sha256": "e3addb011b861c25fbca486acba20e73d5afae69592d1cdf8a15a23f0ad72be8"
+    },
+    "systems/eight-stack-baseline.cfg": {
+      "source": "configs/systems/eight-stack-baseline.cfg",
+      "sha256": "a1e9e46f7054260351d04101fd54c1bf4df144cd606fc88fe5519d26390c2823"
+    },
+    "systems/miniquick/2hbm-6hbf.cfg": {
+      "source": "configs/systems/miniquick/2hbm-6hbf.cfg",
+      "sha256": "c3bcb91271ac335e5f0df3421f86c708650145588a244be36fec9c2e998fa07d"
+    },
+    "systems/miniquick/4hbm-4hbf.cfg": {
+      "source": "configs/systems/miniquick/4hbm-4hbf.cfg",
+      "sha256": "bf169b1d78a9fd2033f4aa6c6d00e6442e356e300c0da5c9856cd05e02b74bfc"
+    },
+    "systems/miniquick/6hbm-2hbf.cfg": {
+      "source": "configs/systems/miniquick/6hbm-2hbf.cfg",
+      "sha256": "e2c73b2fc2d93669316be5087a56beaa249bcd5f6d531e848a4d23a4de330916"
+    },
+    "systems/miniquick/eight-stack-baseline.cfg": {
+      "source": "configs/systems/miniquick/eight-stack-baseline.cfg",
+      "sha256": "0877b64a15b81b95fad4df390e46e4577109c1042044b4e396b981503ea6e434"
+    },
+    "systems/sglang-small.cfg": {
+      "source": "configs/systems/sglang-small.cfg",
+      "sha256": "dcade956ec87db537e971517ee22454737217a9454d79d6e3d8bfd6df259cc0c"
+    }
+  },
+  "parameter_changes": {
+    "4hbm-4hbf-miniquick.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "800",
+        "new": "200"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "4hbm-4hbf.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "8192",
+        "new": "2048"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "eight-stack-baseline.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "8192",
+        "new": "2048"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "systems/2hbm-6hbf.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "8192",
+        "new": "2048"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "systems/4hbm-4hbf.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "8192",
+        "new": "2048"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "systems/6hbm-2hbf.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "8192",
+        "new": "2048"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "systems/eight-stack-baseline.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "8192",
+        "new": "2048"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "systems/miniquick/2hbm-6hbf.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "800",
+        "new": "200"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "systems/miniquick/4hbm-4hbf.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "800",
+        "new": "200"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "systems/miniquick/6hbm-2hbf.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "800",
+        "new": "200"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "systems/miniquick/eight-stack-baseline.cfg": {
+      "hbf-blocks-per-plane": {
+        "old": "800",
+        "new": "200"
+      },
+      "hbf-channel-bw": {
+        "old": "421.875",
+        "new": "101.25"
+      },
+      "hbf-channels": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-dies-per-channel": {
+        "old": "4",
+        "new": "1"
+      },
+      "hbf-ecc-decode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-ecc-encode-raw-bw": {
+        "old": "105.46875",
+        "new": "101.25"
+      },
+      "hbf-hbio-bw": {
+        "old": "1600",
+        "new": null
+      },
+      "hbf-media-lanes-per-plane": {
+        "old": "16",
+        "new": "1"
+      },
+      "hbf-page-buffer-banks-per-plane": {
+        "old": "16",
+        "new": "2"
+      },
+      "hbf-page-run-acceleration": {
+        "old": "true",
+        "new": null
+      },
+      "hbf-planes-per-die": {
+        "old": "4",
+        "new": "16"
+      },
+      "hbf-program-ns": {
+        "old": "95000",
+        "new": "75000"
+      },
+      "hbf-program-verify-ns": {
+        "old": "5000",
+        "new": null
+      },
+      "hbf-read-ns": {
+        "old": "1000",
+        "new": "4000"
+      },
+      "hbf-speed-grade": {
+        "old": null,
+        "new": "2"
+      },
+      "hbf-standard": {
+        "old": null,
+        "new": "OCP-HBF-0.7.0-2026-08-03"
+      },
+      "hbf-subarrays-per-plane": {
+        "old": "32",
+        "new": null
+      },
+      "hbf-tsv-bw": {
+        "old": "1712.5",
+        "new": "1644"
+      },
+      "hbm-pin-rate-gbps": {
+        "old": "9.6",
+        "new": "8"
+      },
+      "hbm-standard": {
+        "old": null,
+        "new": "JEDEC-JESD270-4-2025-04"
+      }
+    },
+    "simulation-session-mini.cfg": {
+      "hbf-read-buffer-pages": {
+        "old": "16",
+        "new": null
+      }
+    }
+  },
+  "parameter_provenance_sha256": "38e2242857feeebb81fefc9283c9e196d0c30bc1e47d187c2b469d0cab3a55af"
+}

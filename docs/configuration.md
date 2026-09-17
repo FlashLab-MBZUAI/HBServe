@@ -30,3 +30,76 @@ For publishable results, freeze the complete config set, hash it in the run
 receipt, cite a source or calibration artifact for every physical parameter,
 and validate against a holdout workload. Parameters without such evidence must
 remain labeled assumptions or sensitivity variables.
+
+## Backend compatibility and OCP migration
+
+Current profiles target HBFSim **2a59b7f13461356d33c00ad1f25fdee4e0bf7fb1**.
+The HBServe base revision **3a6b9a5** shipped older vendor-target profiles that
+fail with this backend. This change adopts the corresponding HBFSim OCP v0.7.0
+Grade 2 profiles, rather than attempting to reproduce the obsolete model.
+`configs/ocp-profile-source.json` records source hashes and **every changed,
+added or removed parameter in each of the 11 complete profiles, plus the mini session overlay**. The copied
+`configs/parameter-provenance.json` gives upstream evidence and assumption
+labels. These are source identities, not hardware validation receipts.
+
+| Parameter | Previous profile | Current profile / meaning |
+| --- | --- | --- |
+| HBF channels × dies/channel × banks/die | 4 × 4 × 4 | 16 × 1 × 16; 256 banks/stack |
+| Blocks/bank (full; mini) | 8192; 800 | 2048; 200, preserving 512; 50 GiB raw/stack |
+| `hbf-subarrays-per-plane` | 32 | Removed; backend has one ordered sense resource/bank |
+| Media lanes; page-buffer banks/bank | 16; 16 | 1; 2 |
+| Read; program latency (ns) | 1000; 95000 | 4000; 75000, upstream assumptions |
+| `hbf-program-verify-ns` | 5000 | Removed; no separate configurable verify stage |
+| `hbf-hbio-bw` | 1600 GB/s | Removed; interface derived from explicit speed grade 2 |
+| ECC decode/encode raw rate | 105.46875 | 101.25 GB/s |
+| Channel; TSV rate | 421.875; 1712.5 | 101.25; 1644 GB/s |
+| `hbf-page-run-acceleration` | true | Removed obsolete execution switch; no replacement key |
+| `hbf-read-buffer-pages` (session mini overlay) | 16 | Removed; backend owns two decoded pages per bank |
+| HBM pin rate | 9.6 Gb/s | 8 Gb/s (2048 GB/s/stack), upstream baseline |
+| Standards | implicit | Explicit OCP-HBF-0.7.0-2026-08-03 and JEDEC-JESD270-4-2025-04 |
+
+The above are **physical model changes**, not equivalent key renames. Other
+values, including stack counts, capacities, thermal assumptions and write-buffer
+policy, retain the corresponding profile values. Miniquick changes capacity only
+relative to the *new* full profile; it does not retain old-model timing.
+`host-hbf-dram-bandwidth-gbps` is also obsolete, but was already absent from the
+3a6b9a5 source configs. Controller storage/service follows the selected backend's
+HBM contract; this migration does not restore a private controller DRAM model.
+
+| Pair / entry | Startup status | Physical equivalence |
+| --- | --- | --- |
+| HBServe 3a6b9a5 original profiles + HBFSim 2a59b7f | Rejected (obsolete keys) | No |
+| Migrated profiles + updated bundled or target external client + HBFSim 2a59b7f | Bounded config/session tests pass | Not equivalent to original profiles |
+| Migrated profiles + original bundled client | Native read-receipt validation fails | Config-only fix is insufficient |
+| Migrated profiles + historical HBFSim versions | Not certified; pin matching source/configs | Not assumed |
+| Historical results + original binary/config/trace | Retained evidence, not rerun here | Unchanged files; original scope only |
+| Zero-HBM `0h8f` execution | Still unsupported by controller-HBM contract | Not repaired by this change |
+
+Flat serving profiles and `systems/` profiles now select identical values for
+matching shapes. SGLang examples explicitly select HBServe's `systems/` base
+and `sglang-small.cfg` overlay; commands in `docs/sglang.md` run from HBFSim.
+The native coarse path remains the default. No simulator or serving algorithm
+is changed. The bundled Python simulation-session client is updated to the
+selected backend contract: scalar read receipts with conservation checks,
+`pending_block_transitions`, `raw-physical` mapping, resolved HBM burst and
+controller buffer reservations (including scratch/GC), zone-managed image
+validation, and logical page invalidation / wear-output hooks needed by SGLang. The old bundled
+client rejects the new read receipt even after every config is fixed. Running
+from the HBServe directory selects this bundled client ahead of PYTHONPATH;
+therefore configuration-only changes do not fix standalone HBServe. No legacy
+field fallback or old physical model is reintroduced.
+
+Run the focused checks with explicit paths (no editable install required):
+
+```sh
+python tests/test_config_compatibility.py \
+  --hbfsim-root /path/to/HBFSim --simulator /path/to/hbfsim
+```
+
+These checks verify config acceptance, profile provenance values, capacity
+invariants and window config composition. Synthetic session checks only certify
+software wiring. They do not validate inference performance, GPU cache accuracy,
+phase-specific hardware errors, or a new model/context. Freeze new configurations
+for any rerun; simulated time, traffic and placement may change, and old fits,
+calibration coefficients and reported errors must not automatically carry over.
+Do not rewrite historical experiment JSON, configs, manifests or results.

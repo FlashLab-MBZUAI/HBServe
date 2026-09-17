@@ -744,7 +744,7 @@ QUIESCENCE_FIELDS = {
     "write_buffer_entries",
     "inflight_buffered_generations",
     "pending_physical_programs",
-    "pending_physical_erases",
+    "pending_block_transitions",
 }
 
 
@@ -789,6 +789,7 @@ class ResolvedSystemConfig:
     values: Mapping[str, str]
     artifacts: tuple[Mapping[str, Any], ...]
     logical_hbf_capacity_bytes: int | None = None
+    resolved_hbm_burst_bytes: int | None = None
 
     def resolve(
         self, simulator_path: Path, *, enable_hbf: bool = True
@@ -836,6 +837,7 @@ class ResolvedSystemConfig:
         resolved = replace(
             self, values={**self.values, **values},
             logical_hbf_capacity_bytes=capacity,
+            resolved_hbm_burst_bytes=_positive_integer(descriptor.get("hbm_burst_bytes"), "resolved HBM burst"),
         )
         if capacity > resolved.hbf_geometry.capacity_bytes:
             raise SimulationSessionError("resolved logical HBF capacity exceeds raw capacity")
@@ -936,7 +938,20 @@ class ResolvedSystemConfig:
         return self.integer("hbm-capacity-bytes")
 
     @property
+    def hbf_buffer_hbm_bytes(self) -> int:
+        burst = self.hbm_burst_bytes
+        return (self.hbf_ctrl_dram_bytes + burst - 1) // burst * burst
+
+    def hbm_application_capacity(self, *, enable_hbf: bool) -> int:
+        capacity = self.hbm_capacity_bytes - (self.hbf_buffer_hbm_bytes if enable_hbf else 0)
+        if capacity <= 0:
+            raise SimulationSessionError("HBM cannot contain the HBF controller buffer and application memory")
+        return capacity
+
+    @property
     def hbm_burst_bytes(self) -> int:
+        if self.resolved_hbm_burst_bytes is not None:
+            return self.resolved_hbm_burst_bytes
         channel_width = self.integer("hbm-channel-width-bits")
         pseudo_channels = self.integer("hbm-pseudo-channels")
         burst_length = self.integer("hbm-burst-length")
@@ -952,10 +967,10 @@ class ResolvedSystemConfig:
     @property
     def hbf_mapping_mode(self) -> str:
         mode = self.values.get("hbf-mapping-mode", "full-resident")
-        if mode not in {"full-resident", "cached", "direct"}:
+        if mode not in {"full-resident", "cached", "raw-physical"}:
             raise SimulationSessionError(
                 "resolved HBFSim config hbf-mapping-mode must be "
-                "full-resident, cached, or direct"
+                "full-resident, cached, or raw-physical"
             )
         return mode
 
@@ -1097,7 +1112,7 @@ class ResolvedSystemConfig:
                 * geometry.page_size_bytes
                 * geometry.stacks
             )
-        if self.hbf_mapping_mode == "direct":
+        if self.hbf_mapping_mode == "raw-physical":
             # The exposed address space carries no L2P state; controller
             # DRAM holds only a configured write buffer, and direct mode
             # requires coalescing disabled.
@@ -1127,7 +1142,12 @@ class ResolvedSystemConfig:
                 * geometry.page_size_bytes
                 * geometry.stacks
             )
-        return mapping_bytes + write_buffer_bytes
+        scratch_bytes = (int(self.values.get("hbf-mapping-scratch-pages", "0"))
+                         * (geometry.page_size_bytes + int(self.values.get("hbf-mapping-cache-tag-bytes", "0")))
+                         * geometry.stacks)
+        gc_bytes = (geometry.page_size_bytes * geometry.stacks
+                    if self.boolean("hbf-auto-gc", default=True) else 0)
+        return mapping_bytes + write_buffer_bytes + scratch_bytes + gc_bytes
 
     @property
     def external_backing_identity(self) -> Mapping[str, Any]:
@@ -1243,6 +1263,7 @@ class SimulationSession:
         initial_hbf_logical_pages: int = 0,
         initial_hbf_persistent_image: Path | None = None,
         hbf_physical_heatmap: Path | None = None,
+        hbf_wear_output_prefix: Path | None = None,
         hbf_physical_heatmap_bins: int = 0,
         read_timeout_s: float | None = None,
     ) -> None:
@@ -1293,6 +1314,10 @@ class SimulationSession:
                     "a disabled HBM tier cannot have an effective capacity"
                 )
             capacity = 0
+        buffer_hbm_bytes = system_config.hbf_buffer_hbm_bytes if enable_hbf else 0
+        if buffer_hbm_bytes and (not enable_hbm or capacity <= buffer_hbm_bytes):
+            raise SimulationSessionError("HBF controller buffers require an enabled HBM tier with sufficient capacity")
+        application_capacity = capacity - buffer_hbm_bytes
         if (
             isinstance(static_hbf_blocks_per_plane, bool)
             or not isinstance(static_hbf_blocks_per_plane, int)
@@ -1362,6 +1387,8 @@ class SimulationSession:
                 "initial HBF persistent image is mutually exclusive with "
                 "static or dense initial placement"
             )
+        if enable_hbf and initial_pages and system_config.hbf_mapping_mode == "raw-physical":
+            raise SimulationSessionError("raw-physical mode cannot install an implicit logical image")
         if enable_hbf and initial_pages:
             geometry = system_config.hbf_geometry
             end_bytes = (first_lpn + initial_pages) * geometry.page_size_bytes
@@ -1385,7 +1412,7 @@ class SimulationSession:
                 * geometry.pages_per_block
             )
             minimum_mapping_pages = (
-                0 if system_config.hbf_mapping_mode == "direct" else
+                0 if system_config.hbf_mapping_mode == "raw-physical" else
                 hbf_dense_mapping_pages(first_lpn, initial_pages, geometry)
             )
             if (
@@ -1409,6 +1436,8 @@ class SimulationSession:
             else None
         )
         self._hbm_capacity_bytes = capacity
+        self._hbm_application_capacity_bytes = application_capacity
+        self._hbf_buffer_hbm_bytes = buffer_hbm_bytes
         self._configured_hbm_capacity_bytes = configured_hbm_capacity
         self._hbf_mapping_mode = system_config.hbf_mapping_mode
         self._hbf_ctrl_dram_bytes = system_config.hbf_ctrl_dram_bytes
@@ -1450,6 +1479,8 @@ class SimulationSession:
                 "--initial-hbf-persistent-image",
                 str(persistent_artifact["path"]),
             ))
+        if hbf_wear_output_prefix is not None:
+            command.extend(("--hbf-wear-output-prefix", str(Path(hbf_wear_output_prefix).resolve())))
         if hbf_physical_heatmap is not None:
             command.extend((
                 "--hbf-physical-heatmap",
@@ -1495,6 +1526,7 @@ class SimulationSession:
         self._checkpoint_ids: set[str] = set()
         self._wear_snapshot_ids: set[str] = set()
         self._checkpoint_receipts: list[dict[str, Any]] = []
+        self._invalidation_receipts: list[dict[str, Any]] = []
         self._expected_latency_transactions = {
             target: {"read": 0, "write": 0} for target in TRANSACTION_TARGETS
         }
@@ -1517,7 +1549,7 @@ class SimulationSession:
             )
             mapping_pages = (
                 hbf_dense_mapping_pages(first_lpn, initial_pages, geometry)
-                if enable_hbf and system_config.hbf_mapping_mode != "direct"
+                if enable_hbf and system_config.hbf_mapping_mode != "raw-physical"
                 else 0
             )
             expected_initial_image = {
@@ -1569,11 +1601,12 @@ class SimulationSession:
                     )
                     and persistent_ready["raw_capacity_pages"]
                     == raw_capacity_pages
-                    and persistent_ready["raw_pages"]
-                    == (
-                        geometry.planes
-                        * published_blocks
-                        * geometry.pages_per_block
+                    and isinstance(persistent_ready.get("zone_managed"), bool)
+                    and persistent_ready["raw_pages"] <= raw_capacity_pages
+                    and (
+                        persistent_ready["zone_managed"]
+                        or persistent_ready["raw_pages"]
+                        == geometry.planes * published_blocks * geometry.pages_per_block
                     )
                     and persistent_ready.get("encoding")
                     in {"materialized_v2", "compact_v2"}
@@ -1611,6 +1644,9 @@ class SimulationSession:
                 or ready.get("enable_hbm") is not self._enable_hbm
                 or ready.get("enable_hbf") is not self._enable_hbf
                 or ready.get("enable_external") is not self._enable_external
+                or ready.get("host_memory_model") != "hbm-reserved-shared-data-channels"
+                or ready.get("hbf_buffer_hbm_bytes") != self._hbf_buffer_hbm_bytes
+                or ready.get("hbm_application_capacity_bytes") != self._hbm_application_capacity_bytes
                 or ready.get("hbf_mapping_mode") != self._hbf_mapping_mode
                 or ready.get("hbf_ctrl_dram_bytes")
                 != self._hbf_ctrl_dram_bytes
@@ -1898,16 +1934,7 @@ class SimulationSession:
                 f"traffic for batch {batch.batch_id}"
             )
         read_engine = completion.get("hbf_read_engine")
-        read_engine_fields = (
-            "page_run_requests",
-            "page_run_pages",
-            "page_run_physical_requests",
-            "page_run_static_requests",
-            "page_run_logical_requests",
-            "streaming_read_buffer_bypass_pages",
-            "scalar_read_requests",
-            "scalar_read_pages",
-        )
+        read_engine_fields = ("scalar_read_requests", "scalar_read_pages")
         if not isinstance(read_engine, Mapping) or set(read_engine) != set(
             read_engine_fields
         ):
@@ -1939,20 +1966,8 @@ class SimulationSession:
             // page_size
             for transaction in hbf_reads
         )
-        if (
-            normalized_engine["page_run_requests"]
-            + normalized_engine["scalar_read_requests"]
-            != len(hbf_reads)
-            or normalized_engine["page_run_pages"]
-            + normalized_engine["scalar_read_pages"]
-            != hbf_read_pages
-            or normalized_engine["page_run_physical_requests"]
-            + normalized_engine["page_run_static_requests"]
-            + normalized_engine["page_run_logical_requests"]
-            != normalized_engine["page_run_requests"]
-            or normalized_engine["streaming_read_buffer_bypass_pages"]
-            > hbf_read_pages
-        ):
+        if (normalized_engine["scalar_read_requests"] != len(hbf_reads)
+                or normalized_engine["scalar_read_pages"] != hbf_read_pages):
             raise SimulationSessionError(
                 f"HBFSim read-engine receipt does not conserve HBF "
                 f"reads for batch {batch.batch_id}"
@@ -2088,6 +2103,69 @@ class SimulationSession:
         """Persist pending HBF state and causally continue the same session."""
 
         return self._checkpoint(checkpoint_id, image_output=None)
+
+    @property
+    def hbf_wear_artifacts(self) -> dict[str, str] | None:
+        """Final offline HTML and JSON paths, available after graceful close."""
+        return deepcopy((self._stop_receipt or {}).get("hbf_wear_artifacts"))
+
+    def invalidate_hbf_pages(
+        self, command_id: str, *, first_lpn: int, page_count: int,
+    ) -> dict[str, Any]:
+        """Deallocate whole logical HBF pages after all issued IO finishes.
+
+        Unissued buffered data is discarded, live physical pages become
+        invalid, and mapping updates use the ordinary controller/cache path.
+        This does not flush other buffered data or erase the invalid media.
+        It advances the next batch's origin, and records its own device delta
+        outside the read/write transaction census.
+        """
+        if self._closed or not self._enable_hbf:
+            raise SimulationSessionError("logical invalidation requires an active HBF session")
+        try:
+            identifier = require_safe_identifier(command_id, "logical invalidation id")
+        except TransactionProtocolError as error:
+            raise SimulationSessionError(str(error)) from error
+        first_lpn = _nonnegative_integer(first_lpn, "first logical page")
+        page_count = _positive_integer(page_count, "logical page count")
+        if first_lpn >= 2**64 or page_count >= 2**64:
+            raise SimulationSessionError("logical invalidation range exceeds uint64")
+        assert self._process.stdin is not None
+        self._process.stdin.write(f"HBF_INVALIDATE {identifier} {first_lpn} {page_count}\n")
+        self._process.stdin.flush()
+        receipt = self._read_response(f"logical invalidation {identifier}")
+        if receipt.get("result") == "error":
+            raise SimulationSessionError(str(receipt.get("message", "logical invalidation rejected")))
+        if (receipt.get("schema") != "hbfsim.hbf_logical_invalidation.v1" or
+                receipt.get("result") != "pass" or receipt.get("id") != identifier or
+                receipt.get("first_lpn") != first_lpn or receipt.get("page_count") != page_count):
+            raise SimulationSessionError("invalid logical invalidation completion")
+        invalidated = _nonnegative_integer(receipt.get("invalidated_pages"), "invalidated pages")
+        unmapped = _nonnegative_integer(receipt.get("unmapped_pages"), "already unmapped pages")
+        discarded = _nonnegative_integer(receipt.get("discarded_buffer_pages"), "discarded buffer pages")
+        discarded_bytes = _nonnegative_integer(receipt.get("discarded_buffer_bytes"), "discarded buffer bytes")
+        if (invalidated + unmapped != page_count or discarded > page_count or
+                discarded_bytes > discarded * self._system_config.hbf_geometry.page_size_bytes):
+            raise SimulationSessionError("logical invalidation page accounting diverged")
+        arrival = _finite_nonnegative(receipt.get("arrival_ns"), "logical invalidation arrival")
+        finish = _finite_nonnegative(receipt.get("finish_ns"), "logical invalidation finish")
+        elapsed = _finite_nonnegative(receipt.get("elapsed_ns"), "logical invalidation elapsed")
+        if (arrival < self._issued_work_frontier_ns or finish < arrival or
+                not math.isclose(elapsed, finish - arrival, rel_tol=1e-12, abs_tol=1e-6)):
+            raise SimulationSessionError("logical invalidation timing diverged")
+        _validate_device_accounting(
+            receipt.get("device_delta"), enable_hbm=self._enable_hbm,
+            enable_hbf=True, enable_external=self._enable_external,
+            external_kind=None if self._external_backing is None else str(self._external_backing["kind"]),
+            description=f"logical invalidation {identifier} device delta",
+        )
+        physical_bytes = _nonnegative_integer(receipt.get("physical_bytes"), "invalidation physical bytes")
+        hbf = receipt["device_delta"]["hbf"]
+        if physical_bytes != hbf["physical_read_bytes"] + hbf["physical_write_bytes"]:
+            raise SimulationSessionError("logical invalidation physical traffic diverged")
+        self._last_finish_ns = self._issued_work_frontier_ns = finish
+        self._invalidation_receipts.append(deepcopy(receipt))
+        return deepcopy(receipt)
 
     def hbf_wear_snapshot(self, snapshot_id: str) -> dict[str, Any]:
         """Read exact per-writable-block P/E counts without changing state."""
@@ -2446,6 +2524,9 @@ class SimulationSession:
                     self._configured_hbm_capacity_bytes
                 ),
                 "effective_hbm_capacity_bytes": self._hbm_capacity_bytes,
+                "hbm_application_capacity_bytes": self._hbm_application_capacity_bytes,
+                "hbf_buffer_hbm_bytes": self._hbf_buffer_hbm_bytes,
+                "host_memory_model": "hbm-reserved-shared-data-channels",
                 "hbf_mapping_mode": self._hbf_mapping_mode,
                 "hbf_ctrl_dram_bytes": self._hbf_ctrl_dram_bytes,
                 "hbf_ctrl_dram_capacity_denominator": (
@@ -2473,6 +2554,7 @@ class SimulationSession:
                 ),
             },
             "lifecycle_checkpoints": deepcopy(self._checkpoint_receipts),
+            "logical_invalidations": deepcopy(self._invalidation_receipts),
             "final_measurement": deepcopy(self._stop_receipt),
         }
 
