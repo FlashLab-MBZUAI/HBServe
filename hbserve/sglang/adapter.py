@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import atexit
-from dataclasses import asdict
+from dataclasses import fields
 import json
 import os
 from pathlib import Path
@@ -38,7 +38,7 @@ def capture_batch(batch, future_map):
             tuple(map(int, token_ids[offset:offset+extend])), len(req.origin_input_ids),
             int(req.sampling_params.max_new_tokens), "decode" if decode else "prefill",
             bool(decode or seq_lens[i] >= len(req.full_untruncated_fill_ids)))
-        rows.append(asdict(row))
+        rows.append({field.name: getattr(row, field.name) for field in fields(row)})
         offset += extend
     if offset != len(token_ids):
         raise ValueError("native input tokens disagree with extend lengths")

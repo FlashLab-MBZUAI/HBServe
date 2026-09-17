@@ -127,6 +127,56 @@ class NativeBackendTest(unittest.TestCase):
         self.assertFalse(s.enable_hbf)
         s.finalize((4, 5))
 
+    def priority_config(self, directory, policy, architecture="peer"):
+        config = self.config(weight_tier=None, kv_tier=None, kv_cache_bytes=0,
+            architecture=architecture, hbm_priority=policy, transfer_chunk_bytes=4096)
+        plan = HardwareSession(config, initialize=False)
+        weights = sum(plan.budget["weight_allocated_bytes_by_tier"].values())
+        reserve = sum(plan.budget[k] for k in ("controller_reserve_bytes", "workspace_reserve_bytes", "staging_bytes"))
+        overlay = Path(directory) / "priority.cfg"
+        overlay.write_text(f"hbm-capacity-bytes={reserve+weights+16384}\n")
+        config["system_configs"].append(str(overlay))
+        return config
+
+    def test_priority_spills_real_native_slots_and_invalidates_only_hbf(self):
+        for architecture in ("peer", "tiered"):
+            with self.subTest(architecture=architecture), tempfile.TemporaryDirectory() as temp:
+                s = HardwareSession(self.priority_config(temp, "weights-first", architecture))
+                try:
+                    self.assertEqual(s.budget["hbm_kv_pool_slots"], 64)
+                    self.assertEqual(s.budget["weight_allocated_bytes_by_tier"]["hbf"], 0)
+                    r = s.run_batch([request("a", (4, 100), (10, 11))], now_ns=0)
+                    self.assertEqual(r["traffic"]["kv_write_bytes_hbm"], 256)
+                    self.assertEqual(r["traffic"]["kv_write_bytes_hbf"], 256)
+                    s.release((4,))
+                    self.assertEqual(s.counters["hbf_invalidated_pages"], 0)
+                    s.finalize((100,))
+                    self.assertEqual(s.counters["hbf_invalidated_pages"], 2)
+                finally:
+                    s.close()
+
+    def test_kv_priority_reserves_pool_and_spills_weights(self):
+        with tempfile.TemporaryDirectory() as temp:
+            s = HardwareSession(self.priority_config(temp, "kv-first"))
+            try:
+                self.assertEqual(s.budget["hbm_kv_pool_slots"], 132)
+                self.assertGreater(s.budget["weight_allocated_bytes_by_tier"]["hbf"], 0)
+                self.assertEqual(s.budget["kv_allocated_bytes_by_tier"]["hbf"], 0)
+                r = s.run_batch([request("a", (4, 100), (10, 11))], now_ns=0)
+                self.assertGreater(r["traffic"]["weight_read_bytes_hbf"], 0)
+                self.assertEqual(r["traffic"]["kv_write_bytes_hbm"], 512)
+                s.finalize((4, 100))
+                self.assertEqual(s.counters["hbf_invalidated_pages"], 0)
+            finally:
+                s.close()
+
+    def test_priority_rejects_ambiguous_tiers_and_unbounded_pool(self):
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            HardwareSession(self.config(hbm_priority="kv-first"), initialize=False)
+        with self.assertRaisesRegex(ValueError, "explicit max_total_tokens"):
+            HardwareSession(self.config(hbm_priority="kv-first", weight_tier=None,
+                kv_tier=None, max_total_tokens=None), initialize=False)
+
     def test_actual_token_ids_and_chunk_output_semantics(self):
         hf = self.config()["model"]
         model = dense_model(hf, "bfloat16", "bfloat16")

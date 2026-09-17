@@ -8,17 +8,17 @@ from __future__ import annotations
 from collections import Counter, OrderedDict
 from dataclasses import asdict, dataclass, field
 import heapq
+import hashlib
 import json
 import math
 from pathlib import Path
+import struct
+import time
 
 from hbfsim_client import ResolvedSystemConfig, SimulationSession, Transaction
 from hbserve.contracts import RooflineTimingProvider
 from .model import NativeCompiler, NativeRequest, dense_model, positive_int
-
-
-def align(n: int, size: int) -> int:
-    return (n + size - 1) // size * size
+from .layout import Placement
 
 
 def merge(intervals):
@@ -87,8 +87,8 @@ class HardwareSession:
         self.output = Path(output) if output else None
         self.model = dense_model(config["model"], config["dtype"], config["kv_dtype"])
         self.timing = RooflineTimingProvider(**config["compute"])
-        self.weight_tier = config.get("weight_tier", "hbf")
-        self.kv_tier = config.get("kv_tier", "hbf")
+        self.weight_tier = config.get("weight_tier") or "hbf"
+        self.kv_tier = config.get("kv_tier") or "hbf"
         if any(t not in {"hbm", "hbf", "external"} for t in (self.weight_tier, self.kv_tier)):
             raise ValueError("weight_tier and kv_tier must be hbm, hbf or external")
         self.architecture = config.get("architecture", "tiered")
@@ -96,7 +96,7 @@ class HardwareSession:
             raise ValueError("architecture must be peer or tiered")
         if self.architecture == "peer" and "external" in (self.weight_tier, self.kv_tier):
             raise ValueError("external backing requires tiered GPU staging; peer is the direct HBF path")
-        self.enable_hbf = "hbf" in (self.weight_tier, self.kv_tier)
+        self.enable_hbf = bool(config.get("hbm_priority")) or "hbf" in (self.weight_tier, self.kv_tier)
         self.enable_external = "external" in (self.weight_tier, self.kv_tier)
         self.system = ResolvedSystemConfig.load(tuple(Path(p) for p in config["system_configs"])).resolve(
             Path(config["simulator"]), enable_hbf=self.enable_hbf)
@@ -115,14 +115,14 @@ class HardwareSession:
             raise ValueError("an HBM KV cache requires tiered HBF/external KV placement")
         self.cache_capacity = cache_bytes // self.page
         self.cache: OrderedDict[int, CachePage] = OrderedDict()
-        self.free_cache_slots = list(range(self.cache_capacity))
+        self.free_cache_slots = []
+        self.next_cache_slot = 0
         self.cache_slot_ready = {}
         self.staging_ready = [None, None]
         self.staging_index = 0
         self.backing_ready = {}
         self.finish_times = {}
         self.live_slots = set()
-        self.live_pages: dict[int, set[int]] = {}
         self.backed_pages = set()
         self.counters = Counter()
         self.serial = 0
@@ -130,53 +130,19 @@ class HardwareSession:
         self.closed = False
         self.last_serving_finish_ns = 0.0
         self.final_drain = None
+        self.wall_start = time.monotonic()
+        self.last_progress = self.wall_start
+        self.completed_requests = set()
+        self.output_tokens = 0
 
-        capacities = {"hbm": self.system.integer("hbm-capacity-bytes"),
-                      "hbf": self.system.logical_hbf_capacity_bytes or 0,
-                      "external": int(self.system.external_backing_identity["capacity_bytes"])
-                                  if self.enable_external else 0}
-        used = {t: 0 for t in capacities}
-        self.weights = {}
-        for obj in self.model.memory_objects:
-            self.weights[obj.id] = used[self.weight_tier]
-            used[self.weight_tier] += align(obj.bytes, self.page)
-        self.initial_hbf_pages = used["hbf"] // self.page
-        self.cache_base = used["hbm"]
-        used["hbm"] += cache_bytes
-        self.staging_base = used["hbm"]
-        staging_bytes = 2 * self.chunk if self.architecture == "tiered" and any(
-            t != "hbm" for t in (self.weight_tier, self.kv_tier)) else 0
-        used["hbm"] += staging_bytes
-        workspace = align(positive_int(config.get("workspace_bytes", 1048576), "workspace_bytes", 0), self.page)
-        controller = align(self.system.hbf_ctrl_dram_bytes, self.page) if self.enable_hbf else 0
-        used["hbm"] += workspace
-        self.kv_base = used[self.kv_tier]
-        self.kv_bytes = self.model.layers[0].kv_bytes_per_token
-        tier_reserve = controller if self.kv_tier == "hbm" else 0
-        per_layer_available = (capacities[self.kv_tier] - tier_reserve - used[self.kv_tier]) // self.model.num_layers
-        per_layer_available = per_layer_available // self.page * self.page
-        available = (per_layer_available // self.kv_bytes - self.page_size) // self.page_size * self.page_size
-        self.max_total_tokens = available if config.get("max_total_tokens") is None else config["max_total_tokens"]
-        positive_int(self.max_total_tokens, "max_total_tokens")
-        if self.max_total_tokens > available or self.max_total_tokens % self.page_size:
-            raise ValueError(f"max_total_tokens must be page aligned and <= placement capacity {available}")
-        self.pool_tokens = self.max_total_tokens + self.page_size
-        self.layer_stride = align(self.pool_tokens * self.kv_bytes, self.page)
-        used[self.kv_tier] += self.model.num_layers * self.layer_stride
-        # The engine reserves controller HBM at the top of its address space.
-        # Charge its capacity without inserting a second gap before the KV arena.
-        used["hbm"] += controller
-        for tier in used:
-            if used[tier] > capacities[tier]:
-                raise ValueError(f"{tier} placement uses {used[tier]} bytes, capacity is {capacities[tier]}")
-        self.budget = {"capacity_bytes": capacities, "allocated_bytes": used,
-            "weight_bytes": self.model.weight_footprint_bytes, "kv_tier": self.kv_tier,
-            "kv_base": self.kv_base, "kv_layer_stride": self.layer_stride,
-            "kv_bytes_per_token_per_layer": self.kv_bytes, "kv_cache_bytes": cache_bytes,
-            "staging_bytes": staging_bytes, "workspace_reserve_bytes": workspace,
-            "controller_reserve_bytes": controller, "hbm_application_bytes": capacities["hbm"]-controller,
-            "max_total_tokens": self.max_total_tokens,
-            "reserved_slots": self.page_size, "kv_pool_tokens": self.pool_tokens}
+        self.placement = Placement(self.model, self.system, config,
+            enable_hbf=self.enable_hbf, enable_external=self.enable_external)
+        self.weights = self.placement.weights
+        self.initial_hbf_pages = self.placement.initial_hbf_pages
+        self.cache_base, self.staging_base = self.placement.cache_base, self.placement.staging_base
+        self.kv_bytes = self.placement.kv_bytes
+        self.max_total_tokens, self.pool_tokens = self.placement.max_total_tokens, self.placement.pool_tokens
+        self.budget = self.placement.budget
         if self.output:
             self.output.mkdir(parents=True, exist_ok=False)
             (self.output / "capacity-budget.json").write_text(json.dumps(self.budget, indent=2))
@@ -241,7 +207,9 @@ class HardwareSession:
 
     def _slot_ranges(self, slot):
         for layer in range(self.model.num_layers):
-            yield from self._pieces(self.kv_base + layer * self.layer_stride + slot * self.kv_bytes, self.kv_bytes)
+            for tier, address, size in self.placement.ranges(self.placement.kv[layer], slot*self.kv_bytes, self.kv_bytes):
+                if tier != "hbm":
+                    yield from self._pieces(address, size)
 
     def release(self, slots):
         """Discard dead sectors; invalidate backing only when the entire page dies."""
@@ -260,9 +228,7 @@ class HardwareSession:
                     entry.valid = subtract(entry.valid, lo, hi)
                     entry.dirty = subtract(entry.dirty, lo, hi)
                     self.counters["discarded_dirty_bytes"] += before - interval_bytes(entry.dirty)
-                self.live_pages[page].discard(slot)
-                if not self.live_pages[page]:
-                    del self.live_pages[page]
+                if not any(s in self.live_slots for s in self.placement.page_slots(self.kv_tier, page)):
                     dead_pages.add(page)
         for page in dead_pages:
             entry = self.cache.pop(page, None)
@@ -271,7 +237,7 @@ class HardwareSession:
                     self.cache_slot_ready[entry.slot] = entry.ready
                 heapq.heappush(self.free_cache_slots, entry.slot)
         invalidations = sorted(dead_pages & self.backed_pages)
-        if self.kv_tier == "hbf":
+        if self.enable_hbf and self.kv_tier != "external":
             # The current core invalidation is an explicit IO fence. Account its
             # time in the next forward; never silently model it as async TRIM.
             for lo, hi in merge((page, page + 1) for page in invalidations):
@@ -300,22 +266,35 @@ class HardwareSession:
                 if slot in self.live_slots:
                     continue
                 self.live_slots.add(slot)
-                for page, _, _ in self._slot_ranges(slot):
-                    self.live_pages.setdefault(page, set()).add(slot)
         self.counters["peak_live_slots"] = max(self.counters["peak_live_slots"], len(self.live_slots))
 
     def _link(self, graph, tier, address, size, write, deps):
         if tier != "hbf":
             return graph.emit(deps=deps)
         counts = Counter()
-        for page, lo, hi in self._pieces(address, size):
-            counts[self.geometry.stack_for_logical_page(page)] += hi-lo
+        # Every complete logical stripe contains one page from every stack,
+        # independent of the mapping-group rotation. Decode only edge stripes.
+        stripe_bytes = self.geometry.stacks * self.page
+        end = address+size
+        middle_begin = min(end, (address+stripe_bytes-1)//stripe_bytes*stripe_bytes)
+        middle_end = max(middle_begin, end//stripe_bytes*stripe_bytes)
+        if middle_end > middle_begin:
+            counts.update({stack: (middle_end-middle_begin)//self.geometry.stacks
+                           for stack in range(self.geometry.stacks)})
+        for begin, finish in ((address, middle_begin), (middle_end, end)):
+            for page, lo, hi in self._pieces(begin, finish-begin):
+                counts[self.geometry.stack_for_logical_page(page)] += hi-lo
         terminals = [graph.emit("D2D_HBM_TO_HBF" if write else "D2D_HBF_TO_HBM",
             "W" if write else "R", 0, count, deps, stack=stack) for stack, count in counts.items()]
         return graph.emit(deps=terminals)
 
     def _backing(self, graph, tier, op, address, size, deps, *, kv=False):
-        pages = {p for p, _, _ in self._pieces(address, size)}
+        # Immutable weights and foreground-only HBM homes have no pending
+        # destages. Do not scan millions of 4 KiB weight pages on every decode.
+        if not kv or tier == "hbm":
+            return graph.emit({"hbm": "HBM", "hbf": "HBF_LOGICAL", "external": "EXTERNAL"}[tier],
+                              op, address, size, deps)
+        pages = range(address//self.page, (address+size+self.page-1)//self.page)
         waits = [self.backing_ready.get((tier, p)) for p in pages]
         terminal = graph.emit({"hbm": "HBM", "hbf": "HBF_LOGICAL", "external": "EXTERNAL"}[tier],
                               op, address, size, (*deps, *waits))
@@ -371,6 +350,9 @@ class HardwareSession:
             return self.cache[page]
         if self.free_cache_slots:
             slot = heapq.heappop(self.free_cache_slots)
+        elif self.next_cache_slot < self.cache_capacity:
+            slot = self.next_cache_slot
+            self.next_cache_slot += 1
         else:
             old_page, old = self.cache.popitem(last=False)
             self._writeback(graph, old_page, old)
@@ -409,17 +391,27 @@ class HardwareSession:
         start, within = divmod(offset, self.kv_bytes)
         if within or size % self.kv_bytes:
             raise ValueError("semantic KV access is not token aligned")
-        slots = row.slots[start:start+size//self.kv_bytes]
-        if len(slots)*self.kv_bytes != size:
-            raise ValueError("semantic KV access exceeds the native slot map")
-        # Preserve actual order and coalesce only truly adjacent native slots.
+        key = (row.rid, start, size)
+        if key not in self.slot_runs:
+            slots = row.slots[start:start+size//self.kv_bytes]
+            if len(slots)*self.kv_bytes != size:
+                raise ValueError("semantic KV access exceeds the native slot map")
+            native_runs = []
+            for slot in slots:
+                if native_runs and native_runs[-1][0]+native_runs[-1][1] == slot:
+                    native_runs[-1] = (native_runs[-1][0], native_runs[-1][1]+1)
+                else:
+                    native_runs.append((slot, 1))
+            self.slot_runs[key] = native_runs
+        # Coalesce once per native access, then project the same slot runs into
+        # each layer. This does not join fragmented allocator ranges.
         runs = []
-        for slot in slots:
-            addr = self.kv_base+layer*self.layer_stride+slot*self.kv_bytes
-            if runs and runs[-1][0]+runs[-1][1] == addr:
-                runs[-1] = (runs[-1][0], runs[-1][1]+self.kv_bytes)
-            else:
-                runs.append((addr, self.kv_bytes))
+        for slot, count in self.slot_runs[key]:
+            for tier, addr, take in self.placement.ranges(self.placement.kv[layer], slot*self.kv_bytes, count*self.kv_bytes):
+                if runs and runs[-1][0] == tier and runs[-1][1]+runs[-1][2] == addr:
+                    runs[-1] = (tier, runs[-1][1], runs[-1][2]+take)
+                else:
+                    runs.append((tier, addr, take))
         return runs
 
     def run_batch(self, rows: list[NativeRequest], *, now_ns: float, freed_slots=()):
@@ -429,6 +421,7 @@ class HardwareSession:
         self.release(freed_slots)
         self._observe(rows)
         canonical = NativeCompiler(self.model, rows, self.timing).batch(self.batches, now_ns)
+        self.slot_runs = {}
         by_key = {r.key: r for r in rows}
         graph = self._graph()
         projection = {}
@@ -438,17 +431,21 @@ class HardwareSession:
             if operation.op is None:
                 terminal = graph.emit(deps=deps, duration=operation.duration_ns)
             elif operation.object_id in self.weights:
-                terminal = self._uncached(graph, self.weight_tier, operation.op,
-                    self.weights[operation.object_id]+operation.offset, operation.bytes, deps)
+                terminals = []
+                for tier, address, size in self.placement.ranges(self.weights[operation.object_id], operation.offset, operation.bytes):
+                    terminals.append(self._uncached(graph, tier, operation.op, address, size, deps))
+                    self.counters[f"weight_read_bytes_{tier}"] += size
+                terminal = terminals[0] if len(terminals) == 1 else graph.emit(deps=terminals)
                 self.counters["weight_read_bytes"] += operation.bytes
             else:
                 parts = operation.object_id.split("/")
                 row, layer = by_key[parts[1]], int(parts[5])
                 terminals = []
-                for address, size in self._kv_ranges(row, layer, operation.offset, operation.bytes):
+                for tier, address, size in self._kv_ranges(row, layer, operation.offset, operation.bytes):
                     terminals.append(self._cached(graph, operation.op, address, size, deps)
-                        if self.cache_capacity else self._uncached(graph, self.kv_tier,
+                        if self.cache_capacity and tier != "hbm" else self._uncached(graph, tier,
                             operation.op, address, size, deps, kv=True))
+                    self.counters[f"kv_{'read' if operation.op == 'R' else 'write'}_bytes_{tier}"] += size
                 terminal = graph.emit(deps=terminals)
                 self.counters["kv_read_bytes" if operation.op == "R" else "kv_write_bytes"] += operation.bytes
             projection[operation.id] = terminal
@@ -466,17 +463,38 @@ class HardwareSession:
             "forward_finish_ns": result.blocking_finish_ns,
             "issued_finish_ns": result.finish_ns,
             "latency_ns": result.blocking_finish_ns-now_ns,
-            "kind": canonical.schedule.kind, "requests": [asdict(r) for r in rows],
+            "kind": canonical.schedule.kind, "requests": [self._request_record(r) for r in rows],
             "freed_slots": list(freed_slots), "live_slots": len(self.live_slots),
             "dirty_cache_bytes": sum(interval_bytes(e.dirty) for e in self.cache.values()),
             "background_pages": flushed, "canonical_sha256": canonical.digest,
             "transaction_sha256": result.receipt["transaction_trace_sha256"],
             "traffic": dict(self.counters-before)}
         self.batches += 1
+        self.output_tokens += sum(r.emits_output for r in rows)
+        self.completed_requests.update(r.rid for r in rows if r.emits_output and
+            len(r.slots) == r.prompt_tokens+r.output_tokens-1)
         if self.output:
             with (self.output / "native_batches.jsonl").open("a") as stream:
                 stream.write(json.dumps(record) + "\n")
+            if time.monotonic()-self.last_progress >= 30 or self.batches == 1:
+                self.last_progress = time.monotonic()
+                progress = {"batches": self.batches, "completed_requests": len(self.completed_requests),
+                    "output_tokens": self.output_tokens, "simulated_seconds": self.last_serving_finish_ns/1e9,
+                    "wall_seconds": self.last_progress-self.wall_start, "live_slots": len(self.live_slots)}
+                temporary = self.output / "progress.tmp"
+                temporary.write_text(json.dumps(progress, indent=2))
+                temporary.replace(self.output / "progress.json")
         return record
+
+    @staticmethod
+    def _request_record(row):
+        # Freeze identity and an exact digest without repeating the entire
+        # growing context in the output on every decode token.
+        digest = hashlib.sha256(struct.pack(f"<{len(row.slots)}I", *row.slots)).hexdigest()
+        return {"rid": row.rid, "past": row.past, "input_tokens": len(row.tokens),
+            "context_tokens": len(row.slots), "prompt_tokens": row.prompt_tokens,
+            "output_tokens": row.output_tokens, "phase": row.phase, "emits_output": row.emits_output,
+            "slots_sha256_le_u32": digest, "new_slots": row.slots[row.past:], "tokens": row.tokens}
 
     def finalize(self, freed_slots=()):
         if self.closed:

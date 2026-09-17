@@ -11,6 +11,8 @@ scheduler, RadixCache and token allocator and uses HBFSim as its forward-time
 backend. It supports HBM/HBF/external placement, a finite HBM KV cache,
 background writeback and allocator-driven KV invalidation. Run it with
 `python -m hbserve.sglang`; the optional runtime has separate dependencies.
+Its request input accepts token JSONL, canonical production-trace bundles, or
+pinned Bailian/Mooncake files with `--trace-source-id`.
 
 The same `hbserve run` command also accepts fixed memory-window experiments.
 Miniquick and full-scale use the same generator, model ledger, and remappers;

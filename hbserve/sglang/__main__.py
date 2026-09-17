@@ -14,6 +14,7 @@ from hbfsim_client import SimulationSessionError
 from .backend import HardwareSession
 from .model import DTYPE_BYTES, DTYPE_NAMES
 from .prepare import prepare, sha, verify
+from .requests import bind_request_ids, load_requests, request_stats_on_input_clock, validate_request_stats
 
 
 def parser():
@@ -27,10 +28,17 @@ def parser():
     run.add_argument("--simulator", type=Path, required=True)
     run.add_argument("--system", type=Path, action="append", required=True)
     run.add_argument("--model", type=Path, required=True)
-    run.add_argument("--requests", type=Path, required=True)
+    run.add_argument("--requests", type=Path, required=True,
+                     help="token JSONL, canonical trace bundle, or pinned raw trace with --trace-source-id")
+    run.add_argument("--trace-source-id", help="HBFSim registry source ID for a raw Bailian/Mooncake file")
+    run.add_argument("--trace-start", type=int, default=0, help="first canonical request index (default: 0)")
+    run.add_argument("--trace-count", type=int, help="maximum consecutive trace requests; selected arrivals rebase to zero")
+    run.add_argument("--allow-synthetic-trace", action="store_true", help="allow the labeled Mooncake synthetic source")
     run.add_argument("--output", type=Path, required=True)
-    run.add_argument("--weight-tier", choices=["hbm", "hbf", "external"], default="hbf")
-    run.add_argument("--kv-tier", choices=["hbm", "hbf", "external"], default="hbf")
+    run.add_argument("--weight-tier", choices=["hbm", "hbf", "external"])
+    run.add_argument("--kv-tier", choices=["hbm", "hbf", "external"])
+    run.add_argument("--hbm-priority", choices=["weights-first", "kv-first"],
+                     help="pack the specified class into HBM first; spill to HBF; reserves the full KV pool")
     run.add_argument("--architecture", choices=["peer", "tiered"], default="tiered")
     run.add_argument("--kv-cache-bytes", type=int, default=0)
     run.add_argument("--background-writeback-pages", type=int, default=2)
@@ -63,30 +71,26 @@ def run(args):
         raise ValueError("the pinned CPU runtime accepts KV in model dtype, bfloat16 or fp8_e4m3")
     if not math.isfinite(args.scheduler_overhead_ns) or args.scheduler_overhead_ns < 0:
         raise ValueError("scheduler-overhead-ns must be finite and nonnegative")
-    records = [json.loads(line) for line in args.requests.read_text().splitlines() if line.strip()]
-    if not records:
-        raise ValueError("request trace must not be empty")
-    previous = -1
-    for index, record in enumerate(records):
-        arrival, tokens, output = record.get("arrival_ns"), record.get("token_ids"), record.get("output_tokens")
-        if (type(arrival) is not int or arrival < 0 or arrival < previous or not isinstance(tokens, list)
-                or not tokens or any(type(t) is not int or not 0 <= t < hf["vocab_size"] for t in tokens)
-                or type(output) is not int or output < 1):
-            raise ValueError(f"invalid request {index}; need ordered arrival_ns, token_ids and output_tokens")
-        previous = arrival
+    request_input = load_requests(args.requests, hf["vocab_size"], source_id=args.trace_source_id,
+        start=args.trace_start, count=args.trace_count, allow_synthetic=args.allow_synthetic_trace)
+    records = request_input.records
     for name in ("max_running_requests", "chunked_prefill_size", "max_prefill_tokens", "page_size"):
         if getattr(args, name) <= 0:
             raise ValueError(f"{name} must be positive")
     config = {"model": hf, "dtype": dtype, "kv_dtype": kv_dtype,
         "simulator": str(args.simulator.resolve()), "system_configs": [str(p.resolve()) for p in args.system],
         "compute": {"peak_tflops": args.compute_tflops, "efficiency": args.compute_efficiency},
-        **{name: getattr(args, name) for name in ("weight_tier", "kv_tier", "architecture", "kv_cache_bytes",
+        **{name: getattr(args, name) for name in ("weight_tier", "kv_tier", "hbm_priority", "architecture", "kv_cache_bytes",
             "background_writeback_pages", "transfer_chunk_bytes", "workspace_bytes", "page_size", "max_total_tokens")}}
     layout = HardwareSession(config, initialize=False)
     config["max_total_tokens"] = layout.max_total_tokens
     context = args.context_length or min(hf.get("max_position_embeddings", layout.max_total_tokens), layout.max_total_tokens)
-    if any(len(r["token_ids"])+r["output_tokens"] > context for r in records):
-        raise ValueError("request prompt plus output exceeds context length or the capacity-derived KV pool")
+    for record in records:
+        required = len(record["token_ids"]) + record["output_tokens"]
+        if required > context:
+            raise ValueError(f"request {record['request_id']} needs {required} prompt+output tokens, "
+                             f"exceeding the context/capacity limit {context}; use sufficient model/context "
+                             "and memory capacity or select a suitable trace window")
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     inputs = out / "inputs"
@@ -100,7 +104,7 @@ def run(args):
         shutil.copyfile(path, dest)
         frozen_system.append(str(dest))
     config["system_configs"] = frozen_system
-    (inputs / "requests.jsonl").write_text("".join(json.dumps(r)+"\n" for r in records))
+    request_input.freeze(inputs)
     hardware_path = out / "hardware.json"
     hardware_path.write_text(json.dumps(config, indent=2))
     (out / "capacity-budget.json").write_text(json.dumps(layout.budget, indent=2))
@@ -108,10 +112,11 @@ def run(args):
     source_paths = [*Path(__file__).parent.glob("*.py"), frontend_root / "compiler.py", frontend_root / "contracts.py"]
     source_files = {str(p.relative_to(frontend_root)): sha(p) for p in source_paths}
     manifest = {"upstream": upstream, "frontend_files": source_files,
-        "requests_sha256": sha(args.requests), "model_sha256": sha(args.model / "config.json"),
+        "requests_sha256": sha(inputs / "requests.jsonl"), "request_source": request_input.provenance,
+        "model_sha256": sha(args.model / "config.json"),
         "simulator_sha256": sha(args.simulator), "arguments": {k: str(v) if isinstance(v, Path) else
             [str(p) for p in v] if k == "system" else v for k, v in vars(args).items()},
-        "scope": "Native scheduler and allocator; synthetic token workload; modeled GPU and memory timing"}
+        "scope": "Native scheduler and allocator; request origin and token encoding in request_source; modeled GPU and memory timing"}
     (out / "inputs.json").write_text(json.dumps(manifest, indent=2))
     # Ensure spawned workers load the same maintained physical client as this
     # process, even when an older HBServe checkout has its own bundled client.
@@ -152,19 +157,17 @@ def run(args):
         enable_mixed_chunk=args.enable_mixed_chunk,
         skip_tokenizer_init=True, disable_radix_cache=args.disable_radix_cache,
         enable_hierarchical_cache=False, sampling_backend="pytorch"))
+    bind_request_ids(runner.engine, records)
     try:
         metrics = runner.benchmark(BenchmarkConfig(ignore_request_timestamp=False), dataset=dataset)
-        result = {"metrics": metrics, "request_stats": runner.get_request_stats(),
+        result = {"metrics": metrics, "request_stats": request_stats_on_input_clock(
+                    runner.get_request_stats(), records[0]["arrival_ns"]),
+                  "upstream_request_time_origin_ns": records[0]["arrival_ns"],
                   "iteration_stats": runner.get_iteration_stats(), "manifest": manifest}
         (out / "serving-result.json").write_text(json.dumps(result, indent=2))
         if metrics is None or metrics.get("completed") != len(records):
             raise RuntimeError("SGLang did not complete every request; inspect the worker log")
-        for request in result["request_stats"]:
-            arrival = request["created_time"]
-            if (request["queue_start"] < arrival-1e-12 or request["queue_end"] < request["queue_start"]-1e-12
-                    or request["last_event_time"] < arrival-1e-12
-                    or any(t < -1e-12 for t in request["gen_token_latencies"])):
-                raise RuntimeError("native request timestamps violate causality")
+        validate_request_stats(records, result["request_stats"])
         physical = json.loads((out / "hbfsim/result.json").read_text())
         if not physical["finalized"] or physical["dirty_cache_bytes"]:
             raise RuntimeError("HBFSim did not finalize and drain its cache")
