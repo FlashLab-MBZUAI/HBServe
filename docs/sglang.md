@@ -37,6 +37,9 @@ dependencies. Preparation refuses to overwrite pre-existing upstream edits.
 CPU/dummy-model mode executes the native scheduling runtime without downloading
 weights or executing CUDA kernels. Single-worker operation and disabled overlap
 scheduling match the pinned upstream simulator's execution model.
+Physical forwards can take minutes of host CPU time. The host watchdog uses
+`--host-forward-timeout-seconds` (24 hours by default), replacing SGLang's
+five-minute serving default. This limit does not enter the simulated clock.
 
 ## Ownership and physical execution
 

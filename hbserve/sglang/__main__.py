@@ -56,6 +56,8 @@ def parser():
     run.add_argument("--dtype", choices=["auto", "float16", "bfloat16", "float32"], default="auto")
     run.add_argument("--kv-cache-dtype", choices=["auto", *DTYPE_BYTES], default="auto")
     run.add_argument("--scheduler-overhead-ns", type=float, default=0)
+    run.add_argument("--host-forward-timeout-seconds", type=float, default=86400,
+                     help="host watchdog per physical forward; does not affect simulated time (default: 24 hours)")
     run.add_argument("--compute-tflops", type=float, default=100)
     run.add_argument("--compute-efficiency", type=float, default=0.5)
     return p
@@ -71,6 +73,8 @@ def run(args):
         raise ValueError("the pinned CPU runtime accepts KV in model dtype, bfloat16 or fp8_e4m3")
     if not math.isfinite(args.scheduler_overhead_ns) or args.scheduler_overhead_ns < 0:
         raise ValueError("scheduler-overhead-ns must be finite and nonnegative")
+    if not math.isfinite(args.host_forward_timeout_seconds) or args.host_forward_timeout_seconds <= 0:
+        raise ValueError("host-forward-timeout-seconds must be finite and positive")
     request_input = load_requests(args.requests, hf["vocab_size"], source_id=args.trace_source_id,
         start=args.trace_start, count=args.trace_count, allow_synthetic=args.allow_synthetic_trace)
     records = request_input.records
@@ -156,6 +160,7 @@ def run(args):
         page_size=args.page_size, context_length=context, schedule_policy=args.schedule_policy,
         enable_mixed_chunk=args.enable_mixed_chunk,
         skip_tokenizer_init=True, disable_radix_cache=args.disable_radix_cache,
+        watchdog_timeout=args.host_forward_timeout_seconds,
         enable_hierarchical_cache=False, sampling_backend="pytorch"))
     bind_request_ids(runner.engine, records)
     try:
