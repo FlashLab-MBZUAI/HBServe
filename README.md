@@ -6,6 +6,12 @@ batching iterations, paged-KV lifecycle events, and byte-exact memory
 transactions. A compatible HBFSim executable can then close the loop with
 physical memory completion times.
 
+The optional [native SGLang frontend](docs/sglang.md) preserves the production
+scheduler, RadixCache and token allocator and uses HBFSim as its forward-time
+backend. It supports HBM/HBF/external placement, a finite HBM KV cache,
+background writeback and allocator-driven KV invalidation. Run it with
+`python -m hbserve.sglang`; the optional runtime has separate dependencies.
+
 The same `hbserve run` command also accepts fixed memory-window experiments.
 Miniquick and full-scale use the same generator, model ledger, and remappers;
 their model, population, and system profiles differ, not their implementation.

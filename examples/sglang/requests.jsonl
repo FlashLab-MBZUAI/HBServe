@@ -1,0 +1,3 @@
+{"arrival_ns":20000,"token_ids":[10,11,12,13,14,15,16,17,18,19,20,21],"output_tokens":4}
+{"arrival_ns":40000,"token_ids":[30,31,32,33,34,35,36,37],"output_tokens":3}
+{"arrival_ns":50000000,"token_ids":[10,11,12,13,14,15,16,17,18,19,20,21,22,23],"output_tokens":2}

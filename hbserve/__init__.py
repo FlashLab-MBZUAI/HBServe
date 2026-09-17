@@ -7,8 +7,9 @@ persistent HBFSim session, with roofline compute by default.
 
 The package deliberately separates request/model semantics from the mapped
 memory protocol.  ``HBServeCompiler`` creates placement-independent
-object accesses; ``HBServePlacement`` is the only layer allowed to turn those
-objects into HBM, HBF, or external-memory transactions.
+object accesses; placement backends turn those objects into HBM, HBF, or
+external-memory transactions. The optional ``hbserve.sglang`` frontend uses
+native SGLang scheduling and slot allocation with its own physical mapper.
 
 ``hbserve.windows`` supplies matched, deterministic memory-only windows for
 controlled topology comparisons without request scheduling or compute timing.
