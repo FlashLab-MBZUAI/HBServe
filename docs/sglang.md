@@ -33,6 +33,9 @@ macOS CPU initialization. `--reference /path/to/sglang` creates a separate
 worktree at the exact revision without copying that checkout's edits. It can
 reuse HBFUltra's source repository; HBFUltra's Python modules are not runtime
 dependencies. Preparation refuses to overwrite pre-existing upstream edits.
+Arrival ties use a unique FIFO index instead of the upstream wall-clock salt,
+which can collide while ingesting large traces. `prepare` refreshes older
+integration edits only after verifying their recorded file digests.
 
 CPU/dummy-model mode executes the native scheduling runtime without downloading
 weights or executing CUDA kernels. Single-worker operation and disabled overlap

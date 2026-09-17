@@ -15,13 +15,20 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def verify(source: Path):
+def _verified_marker(source: Path):
     revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
     if revision != SGLANG_REVISION:
         raise ValueError(f"SGLang must be at {SGLANG_REVISION}; found {revision}")
     marker = json.loads((source / MARKER).read_text())
     if marker["revision"] != revision or any(sha(source / p) != digest for p, digest in marker["files"].items()):
         raise ValueError("prepared SGLang hooks changed; use a fresh checkout and prepare it again")
+    return marker
+
+
+def verify(source: Path):
+    marker = _verified_marker(source)
+    if marker.get("recipe_sha256") != sha(__file__):
+        raise ValueError("prepared SGLang hooks are stale; run prepare to refresh the verified integration edits")
     return marker
 
 
@@ -39,7 +46,15 @@ def prepare(source: Path, reference: Path | None = None):
                 "https://github.com/sgl-project/sglang.git", str(source)], check=True)
             subprocess.run(["git", "-C", str(source), "checkout", "--detach", SGLANG_REVISION], check=True)
     if (source / MARKER).exists():
-        return verify(source)
+        marker = _verified_marker(source)
+        if marker.get("recipe_sha256") == sha(__file__):
+            return marker
+        # Refresh only our digest-verified edits. Unrelated upstream changes
+        # still fail the pristine-file checks below.
+        for path in marker["files"]:
+            pristine = subprocess.check_output(["git", "-C", str(source), "show", f"HEAD:{path}"], text=True)
+            (source / path).write_text(pristine)
+        (source / MARKER).unlink()
     revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
     if revision != SGLANG_REVISION:
         raise ValueError(f"prepare requires exact SGLang revision {SGLANG_REVISION}")
@@ -61,6 +76,8 @@ def prepare(source: Path, reference: Path | None = None):
 
     changed[paths[0]] += "\n# Install the optional HBFSim predictor in parent and spawned interpreters.\nfrom hbserve.sglang.adapter import install as install_hbfsim\ninstall_hbfsim()\n"
     p = paths[1]
+    replace(p, "                        time.time_ns(),  # The request is not comparable, so add the salt to avoid comparison.",
+        "                        len(self.future_queue),  # Unique FIFO index; wall-clock ticks can collide.")
     replace(p, "        def wrapped_run_batch(self, *args, **kwargs):\n",
         "        def wrapped_run_batch(self, *args, **kwargs):\n"
         "            native_snapshot = None\n"
@@ -108,6 +125,6 @@ def prepare(source: Path, reference: Path | None = None):
         "    if _is_cpu_amx_available or _is_cpu_arm64:\n")
     for p, text in changed.items():
         (source / p).write_text(text)
-    marker = {"revision": revision, "files": {p: sha(source / p) for p in paths}}
+    marker = {"revision": revision, "recipe_sha256": sha(__file__), "files": {p: sha(source / p) for p in paths}}
     (source / MARKER).write_text(json.dumps(marker, indent=2))
     return marker
