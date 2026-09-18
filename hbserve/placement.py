@@ -1223,6 +1223,9 @@ class HBServePlacement:
         transactions: list[Transaction] = []
         projection: dict[str, tuple[str, ...]] = {}
         terminal: dict[str, str] = {}
+        compute_windows: list[dict[str, Any]] = []
+        phases = {item.phase for item in batch.schedule.slices}
+        compute_phase = next(iter(phases)) if len(phases) == 1 else "mixed"
         counter = 0
 
         def emit(
@@ -1492,6 +1495,14 @@ class HBServePlacement:
                     dependencies=dependencies,
                     duration_ns=operation.duration_ns,
                 )
+                if operation.role.endswith(("/compute", "/routing_ready")) and operation.duration_ns > 0:
+                    compute_windows.append({
+                        "transaction_id": terminal[operation.id],
+                        "operation_id": operation.id,
+                        "role": operation.role,
+                        "duration_ns": operation.duration_ns,
+                        "phase": compute_phase,
+                    })
                 continue
             assert operation.object_id is not None and operation.op is not None
             if operation.object_id.startswith("request/"):
@@ -1561,6 +1572,9 @@ class HBServePlacement:
             "schema": REMAP_SCHEMA,
             "result": "pass",
             "batch_id": batch_id,
+            # Explicit frontend information for memory policies. Arrival waits
+            # and synchronization barriers are never compute opportunities.
+            "compute_windows": compute_windows,
             "source": {
                 "canonical_batch_sha256": batch.digest,
                 "placement_sha256": self.spec.digest,
