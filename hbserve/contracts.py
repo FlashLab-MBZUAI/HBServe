@@ -63,7 +63,7 @@ MODEL_PROVENANCE_KINDS = {
     "synthetic_sensitivity",
     "ci_fixture",
 }
-TIMING_MODELS = {"memory_only", "linear", "roofline"}
+TIMING_MODELS = {"memory_only", "linear", "roofline", "gpu_calibrated"}
 TIMING_EVIDENCE_STATES = {
     "memory_only",
     "modeled_sensitivity",
@@ -1465,6 +1465,8 @@ class SemanticOperation:
     duration_ns: float
     dependencies: tuple[str, ...]
     role: str
+    span_start: str | None = None
+    span_scale: float = 1.0
 
     @property
     def is_barrier(self) -> bool:
@@ -1474,6 +1476,12 @@ class SemanticOperation:
         _identifier(self.id, "semantic operation id")
         _identifier(self.role, f"semantic operation {self.id} role")
         _finite(self.duration_ns, f"semantic operation {self.id} duration_ns")
+        _finite(self.span_scale, f"semantic operation {self.id} span_scale", minimum=1.0)
+        if self.span_start is not None:
+            if not self.is_barrier or self.span_start not in self.dependencies:
+                raise HBServeError("span start must be a barrier dependency")
+        elif self.span_scale != 1.0:
+            raise HBServeError("span scaling requires a start dependency")
         if self.is_barrier:
             if self.object_id is not None or self.offset != 0 or self.bytes != 0:
                 raise HBServeError(
@@ -1514,6 +1522,8 @@ class SemanticOperation:
             "duration_ns": self.duration_ns,
             "dependencies": list(self.dependencies),
             "role": self.role,
+            **({"span_start": self.span_start, "span_scale": self.span_scale}
+               if self.span_start is not None else {}),
         }
 
 

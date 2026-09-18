@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -151,6 +151,7 @@ class HBServeEngine:
         compiler: HBServeCompiler,
         executor: HBServeExecutor,
         policy: SchedulerPolicy,
+        request_groups: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         self.models = dict(models)
         self.request_trace = request_trace
@@ -172,6 +173,34 @@ class HBServeEngine:
         self._by_id = {state.request.request_id: state for state in self._states}
         self._batch_records: list[dict[str, Any]] = []
         self._preemptions: list[dict[str, Any]] = []
+        # V1 schedules existing running requests in admission order, including
+        # unfinished prefill chunks, before admitting waiting requests.
+        self._running: list[_RequestState] = []
+        self._resumed: list[_RequestState] = []
+        self._request_groups = [dict(id=g['id'],request_ids=list(g['request_ids'])) for g in (request_groups or ())]
+        if self._request_groups:
+            identifiers = [r for g in self._request_groups for r in g['request_ids']]
+            if len(identifiers)!=len(set(identifiers)) or set(identifiers)!=set(self._by_id):
+                raise HBServeError('request groups must partition the offered requests')
+        self._group_index = 0
+        self._group_releases: dict[str, float] = {}
+
+    def _runnable_states(self):
+        if not self._request_groups:
+            return [s for s in self._states if not s.complete]
+        while self._group_index < len(self._request_groups):
+            group = self._request_groups[self._group_index]
+            if group['id'] not in self._group_releases:
+                release=self.executor.frontier_ns
+                self._group_releases[group['id']]=release
+                for identifier in group['request_ids']:
+                    state=self._by_id[identifier]
+                    state.request=replace(state.request,arrival_ns=release+state.request.arrival_ns)
+            states = [self._by_id[r] for r in group['request_ids'] if not self._by_id[r].complete]
+            if states:
+                return states
+            self._group_index += 1
+        return []
 
     def _slice_for(self, state: _RequestState, budget_tokens: int) -> BatchSlice:
         request = state.request
@@ -219,6 +248,11 @@ class HBServeEngine:
         elif mode != "swap_out":
             raise HBServeError(f"executor returned unknown preemption mode {mode!r}")
         state.hot_kv_blocks = False
+        if state in self._running:
+            self._running.remove(state)
+        if state in self._resumed:
+            self._resumed.remove(state)
+        self._resumed.insert(0, state)
         state.preemptions += 1
         self._preemptions.append(
             {
@@ -235,7 +269,7 @@ class HBServeEngine:
         self, batch_id: int
     ) -> tuple[ScheduledBatch, Mapping[str, Any]]:
         frontier = self.executor.frontier_ns
-        unfinished = [state for state in self._states if not state.complete]
+        unfinished = self._runnable_states()
         if not unfinished:
             raise HBServeError("scheduler was called after completion")
         scheduler_now = frontier
@@ -249,19 +283,52 @@ class HBServeEngine:
             ),
             key=lambda state: state.sort_key,
         )
-        running = [state for state in arrived if state.phase == "decode"]
-        waiting = [state for state in arrived if state.phase == "prefill"]
+        running = [state for state in self._running if state in arrived]
+        waiting = [state for state in self._resumed if state in arrived]
+        waiting += [state for state in arrived if state not in running and state not in waiting]
         # One model per iteration: the oldest running request's model, or the
         # oldest arrival's when nothing is decoding.
         model_id = (running or waiting)[0].request.model_id
         budget_tokens = self.policy.max_batch_tokens
-        budget_requests = self.policy.max_batch_requests
         selected: list[tuple[_RequestState, BatchSlice]] = []
-        for state in (*running, *waiting):
+        reservations = []
+        preempted = False
+        for state in running:
+            if state not in self._running:
+                continue
             if state.request.model_id != model_id:
                 continue
-            if budget_tokens == 0 or len(selected) >= budget_requests:
+            if budget_tokens == 0:
                 break
+            batch_slice = self._slice_for(state, budget_tokens)
+            while not self.executor.can_reserve(tuple(s for _, s in selected) + (batch_slice,)):
+                victim = self._running[-1]
+                for index, (chosen, item) in enumerate(selected):
+                    if chosen is victim:
+                        budget_tokens += item.token_count
+                        selected.pop(index)
+                        break
+                self._preempt(batch_id, victim)
+                preempted = True
+                if victim is state:
+                    break
+            if state in self._running:
+                selected.append((state, batch_slice))
+                budget_tokens -= batch_slice.token_count
+
+        # Running-request preemption is finished before publishing planned
+        # full prefix blocks. Later admissions can share blocks produced in
+        # this same synchronous iteration, as in vLLM's allocation path.
+        if selected:
+            reservations.append(self.executor.reserve(batch_id, tuple(s for _,s in selected)))
+        # A new admission may wait for capacity; it must not evict an already
+        # runnable request merely to fill this iteration's token budget.
+        for state in (() if preempted else waiting):
+            if state.request.model_id != model_id:
+                continue
+            if budget_tokens == 0 or len(self._running) >= self.policy.max_batch_requests:
+                break
+            newly_admitted = not state.admitted
             if not state.admitted:
                 cached_tokens = self.executor.admit_request(state.request)
                 if isinstance(cached_tokens, bool) or not isinstance(cached_tokens, int) or not 0 <= cached_tokens < state.request.prompt_tokens:
@@ -271,24 +338,29 @@ class HBServeEngine:
                 state.hot_kv_blocks = cached_tokens > 0
                 state.admitted = True
             batch_slice = self._slice_for(state, budget_tokens)
-            selected.append((state, batch_slice))
-            budget_tokens -= batch_slice.token_count
-
-        while True:
-            slices = tuple(item for _, item in selected)
-            if not slices:
-                raise HBServeError(
-                    "HBM KV pool cannot hold one iteration of any arrived "
-                    "request; enlarge the pool or the cold tier"
-                )
-            if self.executor.can_reserve(slices):
+            if not self.executor.can_reserve(tuple(s for _, s in selected) + (batch_slice,)):
+                if newly_admitted:
+                    self.executor.release_request(state.request.request_id)
+                    state.admitted = False
+                    state.processed = state.prefix_hit_tokens = 0
+                    state.hot_kv_blocks = False
                 break
-            youngest = max(selected, key=lambda pair: pair[0].sort_key)
-            selected.remove(youngest)
-            state = youngest[0]
-            if state.hot_kv_blocks:
-                self._preempt(batch_id, state)
-        receipt = self.executor.reserve(batch_id, slices)
+            selected.append((state, batch_slice))
+            reservations.append(self.executor.reserve(batch_id, tuple(s for _,s in selected)))
+            self._running.append(state)
+            if state in self._resumed:
+                self._resumed.remove(state)
+            budget_tokens -= batch_slice.token_count
+        slices = tuple(item for _, item in selected)
+        if not slices:
+            if preempted:
+                return self._next_schedule(batch_id)
+            raise HBServeError("KV pool cannot hold one schedulable chunk of the oldest waiting request")
+        receipt = dict(reservations[-1])
+        for key in ('allocated_blocks','swap_out_blocks','swap_in_blocks','prefix_cache_evictions'):
+            receipt[key] = sum(r.get(key,0) for r in reservations)
+        for key in ('swap_out_requests','swap_in_requests'):
+            receipt[key] = list(dict.fromkeys(x for r in reservations for x in r.get(key,())))
         for state, _ in selected:
             state.hot_kv_blocks = True
         return (
@@ -327,6 +399,8 @@ class HBServeEngine:
                     state.completion_ns = finish_ns
                     self.executor.release_request(state.request.request_id)
                     state.hot_kv_blocks = False
+                    if state in self._running:
+                        self._running.remove(state)
 
     def run(self) -> dict[str, Any]:
         batch_id = 0
@@ -625,9 +699,12 @@ class HBServeEngine:
                 ),
                 "timing_evidence_states": sorted(timing_states),
                 "claim_boundary": (
-                    "object-level derived memory demand with roofline or "
-                    "sensitivity compute; no measured GPU kernel/tile trace and "
-                    "no end-to-end serving calibration"
+                    "Measured A100 operator backend with paged/ragged demand; "
+                    "request-scheduler and complete-backend validation are separate evidence. "
+                    "Native HBF timing and arbitrary production workloads are not hardware-validated."
+                    if timing_model == 'gpu_calibrated' else
+                    "object-level derived memory demand with roofline, sensitivity or memory-only "
+                    "timing; no end-to-end serving calibration"
                 ),
             },
             "workload_accounting": {
@@ -655,5 +732,19 @@ class HBServeEngine:
             "requests": request_rows,
             "batches": self._batch_records,
         }
+        if self._request_groups:
+            by_id = {r['request_id']:r for r in request_rows}
+            groups = []
+            for group in self._request_groups:
+                selected = [by_id[r] for r in group['request_ids']]
+                release = max(self._group_releases[group['id']], min(r['arrival_ns'] for r in selected))
+                finish = max(r['completion_ns'] for r in selected)
+                ids = set(group['request_ids'])
+                groups.append(dict(group,arrival_ns=release,completion_ns=finish,group_end_to_end_ns=finish-release,
+                    requests=len(selected),output_tokens=sum(r['output_tokens'] for r in selected),
+                    batch_ids=[b['schedule']['batch_id'] for b in self._batch_records
+                        if any(s['request_id'] in ids for s in b['schedule']['slices'])]))
+            result['request_groups'] = groups
+            result['scheduler']['request_group_release'] = 'previous_group_actual_completion'
         result["run_sha256"] = canonical_sha256(result)
         return result

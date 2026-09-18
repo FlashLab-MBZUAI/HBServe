@@ -30,3 +30,25 @@ For publishable results, freeze the complete config set, hash it in the run
 receipt, cite a source or calibration artifact for every physical parameter,
 and validate against a holdout workload. Parameters without such evidence must
 remain labeled assumptions or sensitivity variables.
+
+## Calibrated GPU operators
+
+A run config may select `timing.type = "gpu_calibrated"`, with an absolute
+`profile` JSON path, `model_bindings` (model ID to `8b`, `70b`, or `235b`) and
+`prefetch_depth: 0`; set `compute` to null. The CLI binds the packed weight
+layout before placement and uses the profile's 256-token KV blocks. Supply
+sufficient HBM runtime scratch. The provider reports the profile hash and
+measured validation errors in the result; `calibrated` does not imply a
+production SLO guarantee.
+
+The corresponding profile/evidence lives in the sibling HBFSim repository at
+`evidence/hardware/gpu_operators/`. The v3 runtime rejects old contiguous-KV v2
+profiles. Its native client requires dynamic memory-span barrier support.
+
+Scheduler semantics match the tested vLLM 0.26.0 synchronous FCFS configuration:
+running requests (including unfinished prefills) in admission order, then
+waiting requests; incremental KV allocation; complete prefix blocks shareable
+within a batch; youngest-running-request preemption. Prefix release frees
+suffixes first, and active entries remain protected during capacity eviction.
+This does not claim vLLM async scheduling, speculative decoding, full-prompt
+reservation, TP/EP or every scheduler version.

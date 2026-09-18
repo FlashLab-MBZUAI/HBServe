@@ -281,6 +281,8 @@ def headline_lines(
             f"peak {provider['peak_tflops']:g} TFLOPS x {provider['efficiency']:.2f} "
             f"efficiency, prefetch depth {timing['prefetch_depth']}"
         )
+    elif timing["model"] == "gpu_calibrated":
+        compute_label = "calibrated GPU operators; inferred compute/memory overlap"
     elif timing["model"] == "linear":
         compute_label = (
             f"{provider['fixed_ns_per_layer']:g} ns + "
@@ -601,6 +603,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 prefetch_depth=args.prefetch_depth,
             )
         policy, timing, prefetch_depth = run_config_from_dict(run_config)
+        if timing.timing_model == "gpu_calibrated":
+            models = {key: timing.profile.bind_model(model, timing.model_bindings[key])
+                      for key, model in models.items()}
+            if args.placement in PLACEMENT_PRESETS:
+                placement_spec = replace(derive_placement(system=system,models=models,preset=args.placement),
+                    prefix_cache_bytes=placement_spec.prefix_cache_bytes,
+                    prefix_cache_ttl_ns=placement_spec.prefix_cache_ttl_ns,
+                    kv_block_tokens=timing.profile.document['kv_block_tokens'])
+            elif placement_spec.kv_block_tokens != timing.profile.document['kv_block_tokens']:
+                raise HBServeError("placement page size differs from the calibrated attention backend")
         input_artifacts = {
             "simulator": _artifact(args.simulator),
             "system_configs": [_artifact(path) for path in system_paths],

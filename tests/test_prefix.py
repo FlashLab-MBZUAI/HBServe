@@ -85,12 +85,12 @@ class PrefixTests(unittest.TestCase):
         placement.release_request("active-b")
         self.assertEqual(placement._hot.free_blocks, placement._hot.capacity_blocks)
 
-    def test_partial_blocks_and_uncompleted_prefill_are_never_published(self):
+    def test_partial_blocks_are_private_but_same_batch_full_prefix_is_shared(self):
         request = RequestSpec("short", 0, "dense", 15, 1, tuple(index % 8 for index in range(15)))
         _, placement = self.simulate((request, replace(request, request_id="same", arrival_ns=1000)))
         self.assertEqual(placement._prefix.stats["inserted_blocks"], 0)
         result, _ = self.simulate((self.request("first", 0), self.request("simultaneous", 0)), batch_tokens=32)
-        self.assertEqual([row["prefix_hit_tokens"] for row in result["requests"]], [0, 0])
+        self.assertEqual([row["prefix_hit_tokens"] for row in result["requests"]], [0, 16])
 
     def test_real_simulator_feedback_reuses_only_committed_blocks(self):
         if self.simulator is None:

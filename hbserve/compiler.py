@@ -60,7 +60,7 @@ class HBServeCompiler:
         request_trace: RequestTrace,
         router: RouterProvider | None = None,
         timing: TimingProvider | None = None,
-        prefetch_depth: int = DEFAULT_PREFETCH_DEPTH,
+        prefetch_depth: int | None = None,
     ) -> None:
         if not models:
             raise HBServeError("serving compiler requires models")
@@ -70,6 +70,11 @@ class HBServeCompiler:
                 raise HBServeError(
                     "model map key differs from the ModelSpec model_id"
                 )
+        calibrated = timing is not None and timing.timing_model == "gpu_calibrated"
+        if prefetch_depth is None:
+            prefetch_depth = 0 if calibrated else DEFAULT_PREFETCH_DEPTH
+        if calibrated and prefetch_depth != 0:
+            raise HBServeError("GPU operator calibration requires measured serial kernel order (prefetch_depth=0)")
         if (
             isinstance(prefetch_depth, bool)
             or not isinstance(prefetch_depth, int)
@@ -182,6 +187,9 @@ class HBServeCompiler:
         return model, tuple(rows)
 
     def compile(self, batch: ScheduledBatch) -> CanonicalServingBatch:
+        if self.timing.timing_model == "gpu_calibrated":
+            from hbserve.gpu_compiler import compile_calibrated
+            return compile_calibrated(self, batch)
         model, rows = self._validate_schedule(batch)
         timing = self.timing.timing_for(model=model, batch=batch)
         if len(timing.layer_ns) != model.num_layers:
@@ -311,6 +319,30 @@ class HBServeCompiler:
                         labels={"layer": layer_id},
                     )
                 )
+            layer_writes = []
+            for batch_slice, request in rows:
+                layer_writes.append(
+                    memory(
+                        role="attention/kv_write",
+                        object_id=model.kv_object_id(request.request_id, layer_id),
+                        offset=batch_slice.token_begin * layer.kv_bytes_per_token,
+                        byte_count=batch_slice.token_count * layer.kv_bytes_per_token,
+                        op="W",
+                        dependencies=(compute_barriers[-1] if compute_barriers else embedded,),
+                        labels={
+                            "request_id": request.request_id,
+                            "layer": layer_id,
+                            "token_begin": batch_slice.token_begin,
+                            "token_count": batch_slice.token_count,
+                        },
+                        object_size=(
+                            request.processed_input_tokens
+                            * layer.kv_bytes_per_token
+                        ),
+                    )
+                )
+
+            kv_writes.extend(layer_writes)
             for batch_slice, request in rows:
                 if not batch_slice.context_tokens_before:
                     continue
@@ -324,7 +356,7 @@ class HBServeCompiler:
                             * layer.kv_bytes_per_token
                         ),
                         op="R",
-                        dependencies=(memory_root,),
+                        dependencies=(memory_root, *layer_writes),
                         labels={
                             "request_id": request.request_id,
                             "layer": layer_id,
@@ -441,27 +473,6 @@ class HBServeCompiler:
                 duration_ns=timing.layer_ns[layer_id] - routing_ns,
             )
             compute_barriers.append(compute)
-            for batch_slice, request in rows:
-                kv_writes.append(
-                    memory(
-                        role="attention/kv_write",
-                        object_id=model.kv_object_id(request.request_id, layer_id),
-                        offset=batch_slice.token_begin * layer.kv_bytes_per_token,
-                        byte_count=batch_slice.token_count * layer.kv_bytes_per_token,
-                        op="W",
-                        dependencies=(compute,),
-                        labels={
-                            "request_id": request.request_id,
-                            "layer": layer_id,
-                            "token_begin": batch_slice.token_begin,
-                            "token_count": batch_slice.token_count,
-                        },
-                        object_size=(
-                            request.processed_input_tokens
-                            * layer.kv_bytes_per_token
-                        ),
-                    )
-                )
 
         final_norm = object_by_id[model.object_id("final_norm")]
         tail = memory(

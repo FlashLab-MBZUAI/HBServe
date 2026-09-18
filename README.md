@@ -33,7 +33,9 @@ formulas, and each result carries a machine-readable capability boundary.
   HBM cache, LRU pressure eviction, and optional TTL.
 - Object-exact weight, embedding, LM-head, block-table, and KV traffic.
 - HBM, HBF, and external-memory placement with byte-conservation receipts.
-- Roofline, memory-only, or linear compute timing.
+- Calibrated paged GPU operators, roofline, memory-only, or linear timing.
+  `gpu_calibrated` preserves ragged requests, actual MoE expert counts and
+  compute/memory overlap; its A100 validation scope travels with the profile.
 - A persistent HBFSim session whose completion frontier schedules the next
   iteration.
 - Matched fixed-window topology comparisons: prefill growth, decode-only, and

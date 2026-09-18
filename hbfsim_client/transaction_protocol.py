@@ -274,6 +274,8 @@ class Transaction:
     duration_ns: float = 0.0
     dependencies: tuple[str, ...] = ()
     stack: int | None = None
+    span_start: str | None = None
+    span_scale: float = 1.0
 
     def validate(self) -> None:
         require_safe_identifier(self.id, "transaction id")
@@ -281,6 +283,13 @@ class Transaction:
             raise TransactionProtocolError(f"unknown transaction target: {self.target}")
         _finite(self.issue_ns, f"{self.id}.issue_ns")
         _finite(self.duration_ns, f"{self.id}.duration_ns")
+        _finite(self.span_scale, f"{self.id}.span_scale")
+        if self.span_scale < 1 or (self.span_start is None and self.span_scale != 1):
+            raise TransactionProtocolError("span scaling requires a start and scale >= 1")
+        if self.span_start is not None and (
+            self.target != "BARRIER" or self.span_start not in self.dependencies
+        ):
+            raise TransactionProtocolError("span start must be a barrier dependency")
         if self.target == "BARRIER":
             if (
                 self.op is not None
@@ -337,6 +346,8 @@ class Transaction:
             f"issue_ns={_format_float(self.issue_ns)} "
             f"duration_ns={_format_float(self.duration_ns)} "
             f"deps={dependencies} stack={stack}"
+            + (f" span_start={self.span_start} span_scale={_format_float(self.span_scale)}"
+               if self.span_start is not None else "")
         )
 
 

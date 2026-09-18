@@ -366,7 +366,7 @@ def timing_from_dict(
     timing = _mapping(timing, "timing")
     timing_type = timing.get("type")
     prefetch_depth = _integer(
-        timing.get("prefetch_depth", DEFAULT_PREFETCH_DEPTH),
+        timing.get("prefetch_depth", 0 if timing_type == "gpu_calibrated" else DEFAULT_PREFETCH_DEPTH),
         "timing prefetch_depth",
     )
     if timing_type == "roofline":
@@ -387,6 +387,12 @@ def timing_from_dict(
             f"{timing_type} timing does not consume a compute section; set "
             "compute to null"
         )
+    if timing_type == "gpu_calibrated":
+        from hbserve.gpu_profile import GPUCalibratedTimingProvider
+        _exact(timing, {"type", "profile", "model_bindings", "prefetch_depth"}, "GPU calibration timing")
+        if prefetch_depth != 0:
+            raise HBServeError("GPU calibration has no measured cross-layer prefetch")
+        return GPUCalibratedTimingProvider(timing["profile"], timing["model_bindings"]), 0
     if timing_type == "memory_only":
         _exact(timing, {"type", "prefetch_depth"}, "memory-only timing")
         return MemoryOnlyTimingProvider(), prefetch_depth
@@ -424,7 +430,7 @@ def timing_from_dict(
             ),
             prefetch_depth,
         )
-    raise HBServeError("timing type must be roofline, memory_only, or linear")
+    raise HBServeError("timing type must be gpu_calibrated, roofline, memory_only, or linear")
 
 
 def run_config_from_dict(

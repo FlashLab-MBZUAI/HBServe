@@ -433,7 +433,7 @@ class ContractAndCompilerTests(unittest.TestCase):
             )
             self.assertEqual(
                 [by_id[item].role for item in kv_write.dependencies],
-                ["layer/2/compute"],
+                ["layer/1/compute"],
             )
             complete = batch.operations[-1]
             self.assertEqual(complete.role, "batch/complete")

@@ -930,6 +930,8 @@ class HBServePlacement:
 
         if deficit > 0:
             for key, entry in self._prefix.entries.items():
+                if any(self._hot.references[b] > 1 for b in entry.blocks):
+                    continue  # Live readers pin the cache block, as in vLLM.
                 prefix_evictions.append(key)
                 deficit -= reclaimed(entry.blocks)
                 if deficit <= 0:
@@ -1031,6 +1033,13 @@ class HBServePlacement:
                     layer_blocks.extend(self._hot.allocate(grow))
                 allocated += grow * state.model.num_layers
             state.last_batch_id = batch_id
+            if self.spec.prefix_cache_bytes and state.tier == KV_HOT_TIER:
+                # The synchronous batch cannot be revised after reservation.
+                # Its append operations precede every attention read, so a
+                # later admission may reuse these not-yet-executed blocks.
+                self._prefix.publish(state.prefix_keys, state.blocks,
+                    min(item.token_end,state.request.prompt_tokens)//self.spec.kv_block_tokens,
+                    max(0.,state.request.arrival_ns),pending=True)
         self._pending_batch_id = batch_id
         self._swap_out_blocks += swap_out_blocks
         self._swap_in_blocks += swap_in_blocks
@@ -1086,6 +1095,8 @@ class HBServePlacement:
         assert pool is not None
         for layer_blocks in state.blocks:
             pool.release(layer_blocks)
+        if state.tier == KV_HOT_TIER:
+            self._prefix.release_order(state.prefix_keys)
 
     # ----------------------------------------------------------- weights
     def _cached_entry(self, model_id: str, begin: int, extent: int) -> _CachedModel:
@@ -1237,6 +1248,8 @@ class HBServePlacement:
             dependencies: Sequence[str],
             duration_ns: float = 0.0,
             stack: int | None = None,
+            span_start: str | None = None,
+            span_scale: float = 1.0,
         ) -> str:
             nonlocal counter
             identifier = f"mapped/b{batch_id}/p{counter}"
@@ -1252,6 +1265,8 @@ class HBServePlacement:
                     duration_ns=duration_ns,
                     dependencies=tuple(dict.fromkeys(dependencies)),
                     stack=stack,
+                    span_start=span_start,
+                    span_scale=span_scale,
                 )
             )
             return identifier
@@ -1494,6 +1509,8 @@ class HBServePlacement:
                     byte_count=0,
                     dependencies=dependencies,
                     duration_ns=operation.duration_ns,
+                    span_start=terminal[operation.span_start] if operation.span_start else None,
+                    span_scale=operation.span_scale,
                 )
                 if operation.role.endswith(("/compute", "/routing_ready")) and operation.duration_ns > 0:
                     compute_windows.append({
@@ -1505,7 +1522,12 @@ class HBServePlacement:
                     })
                 continue
             assert operation.object_id is not None and operation.op is not None
-            if operation.object_id.startswith("request/"):
+            if operation.object_id.startswith("workspace/"):
+                if operation.offset + operation.bytes > self.spec.hbm_runtime_reserve_bytes:
+                    raise HBServeError("calibrated workspace exceeds the HBM runtime reserve")
+                pieces = [(self.hbm_kv_end + operation.offset, operation.bytes)]
+                target = "HBM"
+            elif operation.object_id.startswith("request/"):
                 pieces = self._kv_pieces(
                     operation.object_id, operation.offset, operation.bytes
                 )

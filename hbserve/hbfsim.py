@@ -118,8 +118,8 @@ class HbfSimExecutor:
             "network_timing": False,
             "claim_note": (
                 "HBFSim supplies modeled physical memory timing; compute is "
-                "the run's timing model (roofline, linear, or none), with no "
-                "GPU-kernel/tile trace or end-to-end serving calibration"
+                "the explicitly selected run timing model, including calibrated GPU operators. "
+                "Physical HBF accuracy and production server latency are not implied by GPU calibration."
             ),
             "placement": deepcopy(
                 self.placement.frontier_ns_independent_state
