@@ -24,3 +24,4 @@ jobs:
       - run: hbserve capabilities
       - run: python -B tests/test_hbserve.py
       - run: python -B tests/test_windows.py
+      - run: python -B tests/test_session_compatibility.py

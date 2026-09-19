@@ -149,6 +149,7 @@ a serving profiler to cache-line address/arrival traces, and
 ```bash
 python3 -B tests/test_hbserve.py
 python3 -B tests/test_windows.py
+python3 -B tests/test_session_compatibility.py
 python3 -B tests/test_recovery.py
 python3 -B tests/test_hbserve.py --simulator /path/to/HBFSim/build/hbfsim
 python3 -B tests/test_windows.py --simulator /path/to/HBFSim/build/hbfsim
@@ -162,3 +163,7 @@ the tests do not execute the full miniquick or full-scale physical matrix.
 
 HBServe is alpha software. Schemas are versioned, but compatibility is not yet
 promised. The project is available under the [MIT License](LICENSE).
+
+System profiles and the bundled client target HBFSim `60e3f66` and its OCP model. See
+[configuration compatibility](docs/configuration.md#backend-compatibility-and-ocp-migration)
+for physical changes, historical-result limits, and explicit validation commands.
