@@ -47,7 +47,7 @@ HBF_PERSISTENT_IMAGE_SCHEMA = {
 }
 HBF_WEAR_SNAPSHOT_SCHEMA = {
     "name": "hbfsim.hbf_wear_snapshot",
-    "version": 1,
+    "version": 2,
 }
 PROTOCOL = "simulation-transaction-text-v2"
 TIME_BASIS = "batch_relative_ns"
@@ -534,11 +534,13 @@ def _validate_device_accounting(
     enable_external: bool,
     external_kind: str | None,
     description: str,
+    enable_host_dram: bool = False,
 ) -> None:
     if not isinstance(value, Mapping) or set(value) != {
         "hbm",
         "hbf",
         "external",
+        "host_dram",
         "base_die_link",
         "hbf_external_direct_link",
     }:
@@ -558,6 +560,11 @@ def _validate_device_accounting(
         external is not None and not isinstance(external, Mapping)
     ):
         raise SimulationSessionError(f"{description}.external availability diverged")
+    host_dram = value.get("host_dram")
+    if (host_dram is None) == enable_host_dram or (
+        host_dram is not None and not isinstance(host_dram, Mapping)
+    ):
+        raise SimulationSessionError(f"{description}.host_dram availability diverged")
     if not isinstance(value.get("base_die_link"), Mapping):
         raise SimulationSessionError(f"{description}.base_die_link is missing")
     if not isinstance(value.get("hbf_external_direct_link"), Mapping):
@@ -612,14 +619,19 @@ def _validate_device_accounting(
             abs_tol=1e-12,
         ):
             raise SimulationSessionError(f"{description}.hbf WAF does not conserve")
-    if isinstance(external, Mapping):
-        if external.get("kind") != external_kind:
+    for field_name, external, expected_kind in (
+        ("external", external, external_kind),
+        ("host_dram", host_dram, "host-dram"),
+    ):
+        if external is None:
+            continue
+        if external.get("kind") != expected_kind:
             raise SimulationSessionError(
-                f"{description}.external backing kind diverged"
+                f"{description}.{field_name} backing kind diverged"
             )
         counters = {
             field: _nonnegative_integer(
-                external.get(field), f"{description}.external.{field}"
+                external.get(field), f"{description}.{field_name}.{field}"
             )
             for field in (
                 "read_requests",
@@ -661,7 +673,7 @@ def _validate_device_accounting(
             + counters["s2m_protocol_bytes"]
         ):
             raise SimulationSessionError(
-                f"{description}.external transport bytes do not conserve"
+                f"{description}.{field_name} transport bytes do not conserve"
             )
         for field in (
             "outstanding_wait_work_ns",
@@ -680,21 +692,21 @@ def _validate_device_accounting(
             "transport_propagation_work_ns",
         ):
             _finite_nonnegative(
-                external.get(field), f"{description}.external.{field}"
+                external.get(field), f"{description}.{field_name}.{field}"
             )
         if not isinstance(external.get("stage_work"), Mapping):
             raise SimulationSessionError(
-                f"{description}.external stage-work receipt is missing"
+                f"{description}.{field_name} stage-work receipt is missing"
             )
         device_cache = external.get("device_cache")
         if not isinstance(device_cache, Mapping):
             raise SimulationSessionError(
-                f"{description}.external device-cache census is missing"
+                f"{description}.{field_name} device-cache census is missing"
             )
         cache_counters = {
             field: _nonnegative_integer(
                 device_cache.get(field),
-                f"{description}.external.device_cache.{field}",
+                f"{description}.{field_name}.device_cache.{field}",
             )
             for field in EXTERNAL_DEVICE_CACHE_COUNTER_FIELDS
         }
@@ -705,13 +717,13 @@ def _validate_device_accounting(
             > counters["write_requests"]
         ):
             raise SimulationSessionError(
-                f"{description}.external device-cache census exceeds "
+                f"{description}.{field_name} device-cache census exceeds "
                 "caller requests"
             )
         for field in EXTERNAL_DEVICE_CACHE_WORK_FIELDS:
             _finite_nonnegative(
                 device_cache.get(field),
-                f"{description}.external.device_cache.{field}",
+                f"{description}.{field_name}.device_cache.{field}",
             )
 
 
@@ -1256,6 +1268,7 @@ class SimulationSession:
         enable_hbm: bool,
         enable_hbf: bool,
         enable_external: bool = False,
+        host_dram_config: ResolvedSystemConfig | None = None,
         hbm_capacity_bytes: int | None = None,
         static_hbf_blocks_per_plane: int = 0,
         published_hbf_blocks_per_plane: int = 0,
@@ -1299,7 +1312,7 @@ class SimulationSession:
             raise SimulationSessionError(
                 f"HBFSim executable is not executable: {self._simulator_path}"
             )
-        if not enable_hbm and not enable_hbf and not enable_external:
+        if not enable_hbm and not enable_hbf and not enable_external and host_dram_config is None:
             raise SimulationSessionError("simulation session must enable a memory tier")
         configured_hbm_capacity = system_config.hbm_capacity_bytes
         if enable_hbm:
@@ -1429,6 +1442,11 @@ class SimulationSession:
         self._system_config = system_config
         self._enable_hbm = bool(enable_hbm)
         self._enable_hbf = bool(enable_hbf)
+        self._host_dram_config = host_dram_config
+        self._enable_host_dram = host_dram_config is not None
+        self._host_dram_backing = dict(host_dram_config.external_backing_identity) if host_dram_config else None
+        if self._host_dram_backing and self._host_dram_backing["kind"] != "host-dram":
+            raise SimulationSessionError("CPU DRAM attachment must use kind host-dram")
         self._enable_external = bool(enable_external)
         self._external_backing = (
             dict(system_config.external_backing_identity)
@@ -1452,6 +1470,9 @@ class SimulationSession:
         self._initial_hbf_logical_pages = initial_pages
         self._initial_hbf_persistent_artifact = persistent_artifact
         command = [str(self._simulator_path)]
+        if host_dram_config:
+            for path in host_dram_config.paths:
+                command.extend(("--host-dram-config", str(path)))
         for path in system_config.paths:
             command.extend(("--system-config", str(path)))
         command.extend(
@@ -1664,6 +1685,7 @@ class SimulationSession:
                 != expected_initial_image
                 or not persistent_ready_valid
                 or ready.get("external_backing") != self._external_backing
+                or ready.get("host_dram_backing") != self._host_dram_backing
             ):
                 raise SimulationSessionError(
                     "HBFSim simulation-session ready receipt does not match the request"
@@ -1760,11 +1782,6 @@ class SimulationSession:
             raise SimulationSessionError(
                 "restored published extent is read-only"
             )
-        external_transactions = tuple(
-            transaction
-            for transaction in batch.transactions
-            if transaction.target == "EXTERNAL"
-        )
         assert self._process.stdin is not None
         try:
             self._process.stdin.write(batch.begin_line() + "\n")
@@ -1852,6 +1869,7 @@ class SimulationSession:
             enable_hbm=self._enable_hbm,
             enable_hbf=self._enable_hbf,
             enable_external=self._enable_external,
+            enable_host_dram=self._enable_host_dram,
             external_kind=(
                 None
                 if self._external_backing is None
@@ -1859,13 +1877,19 @@ class SimulationSession:
             ),
             description=f"batch {batch.batch_id} device delta",
         )
-        if self._enable_external:
-            external_delta = completion["device_delta"]["external"]
+        for device_name, target, identity in (
+            ("external", "EXTERNAL", self._external_backing),
+            ("host_dram", "HOST_DRAM", self._host_dram_backing),
+        ):
+            if identity is None:
+                continue
+            external_transactions = [t for t in batch.transactions if t.target == target]
+            external_delta = completion["device_delta"][device_name]
             assert isinstance(external_delta, Mapping)
-            assert self._external_backing is not None
-            external_page_size = int(self._external_backing["page_size_bytes"])
+            assert identity is not None
+            external_page_size = int(identity["page_size_bytes"])
             external_segment_size = int(
-                self._external_backing["request_segment_bytes"]
+                identity["request_segment_bytes"]
             )
             external_pages = sum(
                 (
@@ -1894,8 +1918,8 @@ class SimulationSession:
                 or external_delta.get("page_run_pages") != external_pages
             ):
                 raise SimulationSessionError(
-                    f"HBFSim external page-run receipt does not conserve "
-                    f"external traffic for batch {batch.batch_id}"
+                    f"HBFSim {device_name} page-run receipt does not conserve "
+                    f"{device_name} traffic for batch {batch.batch_id}"
                 )
         hbm_engine = completion.get("hbm_engine")
         hbm_engine_fields = ("requests", "bursts")
@@ -2156,6 +2180,7 @@ class SimulationSession:
         _validate_device_accounting(
             receipt.get("device_delta"), enable_hbm=self._enable_hbm,
             enable_hbf=True, enable_external=self._enable_external,
+            enable_host_dram=self._enable_host_dram,
             external_kind=None if self._external_backing is None else str(self._external_backing["kind"]),
             description=f"logical invalidation {identifier} device delta",
         )
@@ -2168,7 +2193,7 @@ class SimulationSession:
         return deepcopy(receipt)
 
     def hbf_wear_snapshot(self, snapshot_id: str) -> dict[str, Any]:
-        """Read exact per-writable-block P/E counts without changing state."""
+        """Observe P/E, device counters and pending state without a drain."""
 
         if self._closed:
             raise SimulationSessionError(
@@ -2234,6 +2259,18 @@ class SimulationSession:
             raise SimulationSessionError(
                 f"HBFSim wear snapshot frontier diverged for {normalized_id}"
             )
+        _validate_device_accounting(
+            receipt.get("device_workload_totals"), enable_hbm=self._enable_hbm,
+            enable_hbf=True, enable_external=self._enable_external,
+            enable_host_dram=self._enable_host_dram,
+            external_kind=None if self._external_backing is None else str(self._external_backing["kind"]),
+            description=f"wear snapshot {normalized_id} device totals",
+        )
+        _normalized_quiescence(receipt.get("quiescence"), f"wear snapshot {normalized_id} pending state")
+        state = receipt["device_workload_totals"]["hbf"].get("state", {})
+        if (state.get("writable_blocks") != expected_blocks or
+                state.get("block_erase_count_sum") != sum(counts) or state.get("accounting_verified") is not True):
+            raise SimulationSessionError("wear snapshot and physical state disagree")
         self._wear_snapshot_ids.add(normalized_id)
         return deepcopy(receipt)
 
@@ -2354,6 +2391,7 @@ class SimulationSession:
             enable_hbm=self._enable_hbm,
             enable_hbf=True,
             enable_external=self._enable_external,
+            enable_host_dram=self._enable_host_dram,
             external_kind=(
                 None
                 if self._external_backing is None
@@ -2473,6 +2511,7 @@ class SimulationSession:
                 enable_hbm=self._enable_hbm,
                 enable_hbf=self._enable_hbf,
                 enable_external=self._enable_external,
+                enable_host_dram=self._enable_host_dram,
                 external_kind=(
                     None
                     if self._external_backing is None
@@ -2516,6 +2555,8 @@ class SimulationSession:
                 "enable_hbf": self._enable_hbf,
                 "enable_external": self._enable_external,
                 "external_backing": deepcopy(self._external_backing),
+                "host_dram_backing": deepcopy(self._host_dram_backing),
+                "host_dram_config": None if self._host_dram_config is None else [str(p) for p in self._host_dram_config.paths],
                 "hbf_external_direct_link": deepcopy(
                     self._hbf_external_direct_link
                 ),
@@ -2632,6 +2673,7 @@ class SimulationSession:
                     enable_hbm=self._enable_hbm,
                     enable_hbf=self._enable_hbf,
                     enable_external=self._enable_external,
+                    enable_host_dram=self._enable_host_dram,
                     external_kind=(
                         None
                         if self._external_backing is None
@@ -2691,6 +2733,7 @@ class SimulationSession:
                     enable_hbm=self._enable_hbm,
                     enable_hbf=self._enable_hbf,
                     enable_external=self._enable_external,
+                    enable_host_dram=self._enable_host_dram,
                     external_kind=(
                         None
                         if self._external_backing is None

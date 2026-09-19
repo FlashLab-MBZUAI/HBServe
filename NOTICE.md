@@ -20,3 +20,8 @@ updates from HBFSim `2a59b7f13461356d33c00ad1f25fdee4e0bf7fb1`, including
 logical page invalidation and wear-output arguments required by native SGLang. Digest performance changes,
 transaction storage optimizations and optional zone commands are not part
 of this compatibility update. See docs/configuration.md.
+
+The client additionally incorporates Host DRAM transaction/accounting and wear
+snapshot v2 validation from HBFSim
+`60e3f6669c49a7e8c0a0bd299955de2527ec6a70`. The original OCP profile provenance
+remains pinned to `2a59b7f`; those profile values are unchanged at `60e3f66`.

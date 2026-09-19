@@ -33,7 +33,10 @@ remain labeled assumptions or sensitivity variables.
 
 ## Backend compatibility and OCP migration
 
-Current profiles target HBFSim **2a59b7f13461356d33c00ad1f25fdee4e0bf7fb1**.
+Current compatibility target: HBFSim **60e3f6669c49a7e8c0a0bd299955de2527ec6a70**.
+The profiles were sourced from **2a59b7f13461356d33c00ad1f25fdee4e0bf7fb1**;
+their recorded source values are unchanged at the current target. The original
+profile source hashes and migration inventory remain intact.
 The HBServe base revision **3a6b9a5** shipped older vendor-target profiles that
 fail with this backend. This change adopts the corresponding HBFSim OCP v0.7.0
 Grade 2 profiles, rather than attempting to reproduce the obsolete model.
@@ -68,9 +71,9 @@ HBM contract; this migration does not restore a private controller DRAM model.
 
 | Pair / entry | Startup status | Physical equivalence |
 | --- | --- | --- |
-| HBServe 3a6b9a5 original profiles + HBFSim 2a59b7f | Rejected (obsolete keys) | No |
-| Migrated profiles + updated bundled or target external client + HBFSim 2a59b7f | Bounded config/session tests pass | Not equivalent to original profiles |
-| Migrated profiles + original bundled client | Native read-receipt validation fails | Config-only fix is insufficient |
+| HBServe 3a6b9a5 original profiles + HBFSim 60e3f66 | Rejected (obsolete keys) | No |
+| Migrated profiles + updated bundled or target external client + HBFSim 60e3f66 | Bounded config/session tests pass | Not equivalent to original profiles |
+| Migrated profiles + bundled client from 6f5a94e + HBFSim 60e3f66 | New transaction census, tier accounting and wear-v2 receipts rejected | Previous protocol fix needs this update |
 | Migrated profiles + historical HBFSim versions | Not certified; pin matching source/configs | Not assumed |
 | Historical results + original binary/config/trace | Retained evidence, not rerun here | Unchanged files; original scope only |
 | Zero-HBM `0h8f` execution | Still unsupported by controller-HBM contract | Not repaired by this change |
@@ -89,12 +92,31 @@ from the HBServe directory selects this bundled client ahead of PYTHONPATH;
 therefore configuration-only changes do not fix standalone HBServe. No legacy
 field fallback or old physical model is reintroduced.
 
+The current backend also emits a `HOST_DRAM` transaction census and an explicit
+`host_dram` accounting slot, including zero/null entries when CPU DRAM is disabled.
+The bundled client validates these fields on completion, invalidation, checkpoint,
+crash and close, and accepts an explicit `host_dram_config` attachment. Host DRAM
+and external backing retain separate transaction, page-run and transport accounting.
+This client interface does not add a new serving placement policy.
+
+Wear snapshots use schema v2: per-block erase counts must agree with physical
+state totals and verified accounting, and the pending-work counters must agree
+with the quiescence flag. Observing a snapshot allows pending writes and does
+not implicitly drain them. The previous client/schema is not accepted as an
+equivalent fallback. The supported backend is the explicit commit above.
+
 Run the focused checks with explicit paths (no editable install required):
 
 ```sh
 python tests/test_config_compatibility.py \
   --hbfsim-root /path/to/HBFSim --simulator /path/to/hbfsim
+python -B tests/test_session_compatibility.py --simulator /path/to/hbfsim
 ```
+
+Without `--simulator`, the session suite runs portable receipt acceptance and
+corruption checks in CI; native HBM-only, Host-DRAM/NVMe coexistence and pending
+wear/checkpoint tests require the explicit executable. Local compatibility
+validation runs with both the bundled and target HBFSim clients.
 
 These checks verify config acceptance, profile provenance values, capacity
 invariants and window config composition. Synthetic session checks only certify

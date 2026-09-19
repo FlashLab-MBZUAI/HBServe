@@ -91,7 +91,7 @@ GPU kernel layout.
 
 Run the commands below from the HBFSim checkout, with both repositories on
 `PYTHONPATH`. System profiles are explicitly selected from HBServe; they target
-HBFSim `2a59b7f` (see [configuration compatibility](configuration.md)).
+HBFSim `60e3f66` (see [configuration compatibility](configuration.md)).
 
 Each JSONL row contains integer `arrival_ns`, nonempty `token_ids`, and positive
 `output_tokens`. Arrival times must be nondecreasing. Shared token prefixes
