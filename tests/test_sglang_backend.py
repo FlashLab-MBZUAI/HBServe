@@ -28,8 +28,8 @@ class NativeBackendTest(unittest.TestCase):
     def config(self, **options):
         return {"model": json.loads((ROOT / "examples/sglang/tiny-qwen3/config.json").read_text()),
             "dtype": "bfloat16", "kv_dtype": "bfloat16", "simulator": str(SIMULATOR),
-            "system_configs": [str(HBFSIM / "configs/systems/eight-stack-baseline.cfg"),
-                               str(HBFSIM / "configs/systems/sglang-small.cfg")],
+            "system_configs": [str(ROOT / "configs/systems/eight-stack-baseline.cfg"),
+                               str(ROOT / "configs/systems/sglang-small.cfg")],
             "compute": {"peak_tflops": 100, "efficiency": 0.5},
             "weight_tier": "hbf", "kv_tier": "hbf", "architecture": "tiered",
             "max_total_tokens": 128, "page_size": 4, "kv_cache_bytes": 8192,

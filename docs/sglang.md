@@ -89,6 +89,10 @@ GPU kernel layout.
 
 ## Requests and execution
 
+Run the commands below from the HBFSim checkout, with both repositories on
+`PYTHONPATH`. System profiles are explicitly selected from HBServe; they target
+HBFSim `60e3f66` (see [configuration compatibility](configuration.md)).
+
 Each JSONL row contains integer `arrival_ns`, nonempty `token_ids`, and positive
 `output_tokens`. Arrival times must be nondecreasing. Shared token prefixes
 produce real radix reuse; a length-only trace cannot supply this information.
@@ -99,8 +103,8 @@ are assigned in input order. Native token JSONL keeps its first arrival time.
 python -m hbserve.sglang run \
   --sglang-root tmp/sglang-native \
   --simulator build/hbfsim \
-  --system configs/systems/eight-stack-baseline.cfg \
-  --system configs/systems/sglang-small.cfg \
+  --system ../HBServe/configs/systems/eight-stack-baseline.cfg \
+  --system ../HBServe/configs/systems/sglang-small.cfg \
   --model ../HBServe/examples/sglang/tiny-qwen3 \
   --requests ../HBServe/examples/sglang/requests.jsonl \
   --weight-tier hbf --kv-tier hbf --architecture tiered \
@@ -132,8 +136,8 @@ python -m workloads.production_request_trace download-source \
 
 python -m hbserve.sglang run \
   --sglang-root tmp/sglang-native --simulator build/hbfsim \
-  --system configs/systems/eight-stack-baseline.cfg \
-  --system configs/systems/sglang-small.cfg \
+  --system ../HBServe/configs/systems/eight-stack-baseline.cfg \
+  --system ../HBServe/configs/systems/sglang-small.cfg \
   --model ../HBServe/examples/sglang/tiny-qwen3 \
   --requests out/public-traces/qwen_traceA_blksz_16.jsonl \
   --trace-source-id qwen_bailian_trace_a --trace-start 8946 --trace-count 3 \
